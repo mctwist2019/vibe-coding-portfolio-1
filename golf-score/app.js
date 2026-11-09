@@ -1225,7 +1225,9 @@
       var q = new URLSearchParams(location.search);
       var hq = new URLSearchParams(hash);
       var broker = hq.get('broker') || q.get('broker');
-      if (broker !== null) { state.settings.broker = /^wss?:\/\//.test(broker) ? broker : ''; }
+      // 링크로 중계 서버를 바꾸는 것은 로컬 개발/테스트에서만 허용 (외부 링크가 서버를 바꿔치기하지 못하도록)
+      var isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+      if (broker !== null && isLocal) { state.settings.broker = /^wss?:\/\//.test(broker) ? broker : ''; }
       var join = hq.get('join') || q.get('join');
       if (join) out = { code: S.normalizeCode(join), b: Number(hq.get('b') || q.get('b')) || 0 };
       if (join || broker !== null) history.replaceState(null, '', location.pathname);

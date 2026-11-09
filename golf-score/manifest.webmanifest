@@ -1,0 +1,13 @@
+{
+  "name": "골프 스코어 & 게임 계산기",
+  "short_name": "골프 스코어",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f6f2",
+  "theme_color": "#1d6b3a",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

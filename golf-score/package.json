@@ -1,0 +1,10 @@
+{
+  "name": "golf-score",
+  "version": "1.0.0",
+  "private": true,
+  "description": "골프 스코어 & 내기 게임 계산기 (정적 웹앱)",
+  "scripts": {
+    "test": "node --test",
+    "start": "python3 -m http.server 8787"
+  }
+}

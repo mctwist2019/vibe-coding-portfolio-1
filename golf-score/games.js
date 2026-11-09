@@ -459,38 +459,40 @@
   function bonuses(round, opt) {
     opt = opt || {};
     var unit = Number(opt.unit) || 0;
-    var res = { events: [], transfers: [], counts: {} };
+    var res = { events: [], transfers: [], counts: {}, unit: unit,
+      enabled: { nearest: !!opt.nearest, longest: !!opt.longest, birdie: !!opt.birdie } };
     var pids = round.players.map(function (p) { return p.id; });
     pids.forEach(function (pid) { res.counts[pid] = { nearest: 0, longest: 0, birdie: 0, eagle: 0 }; });
     var extras = round.extras || {};
+    function pay(to, amount, note) {
+      res.transfers = res.transfers.concat(makeTransfers([to], pids.filter(function (p) { return p !== to; }), amount, 'bonus', note));
+    }
     for (var h = 0; h < round.holes; h++) {
       var ex = extras[h] || {};
-      if (opt.nearest && ex.nearest && res.counts[ex.nearest]) {
+      if (ex.nearest && res.counts[ex.nearest]) {
         res.counts[ex.nearest].nearest++;
         res.events.push({ hole: h, type: 'nearest', pid: ex.nearest });
-        res.transfers = res.transfers.concat(makeTransfers([ex.nearest], pids.filter(function (p) { return p !== ex.nearest; }), unit, 'bonus', (h + 1) + '번홀 니어리스트'));
+        if (opt.nearest) pay(ex.nearest, unit, (h + 1) + '번홀 니어리스트');
       }
-      if (opt.longest && ex.longest && res.counts[ex.longest]) {
+      if (ex.longest && res.counts[ex.longest]) {
         res.counts[ex.longest].longest++;
         res.events.push({ hole: h, type: 'longest', pid: ex.longest });
-        res.transfers = res.transfers.concat(makeTransfers([ex.longest], pids.filter(function (p) { return p !== ex.longest; }), unit, 'bonus', (h + 1) + '번홀 롱기스트'));
+        if (opt.longest) pay(ex.longest, unit, (h + 1) + '번홀 롱기스트');
       }
-      if (opt.birdie) {
-        pids.forEach(function (pid) {
-          var g = gross(round, pid, h);
-          if (g === null) return;
-          var d = g - round.pars[h];
-          if (d === -1) {
-            res.counts[pid].birdie++;
-            res.events.push({ hole: h, type: 'birdie', pid: pid });
-            res.transfers = res.transfers.concat(makeTransfers([pid], pids.filter(function (p) { return p !== pid; }), unit, 'bonus', (h + 1) + '번홀 버디'));
-          } else if (d <= -2) {
-            res.counts[pid].eagle++;
-            res.events.push({ hole: h, type: 'eagle', pid: pid });
-            res.transfers = res.transfers.concat(makeTransfers([pid], pids.filter(function (p) { return p !== pid; }), unit * 2, 'bonus', (h + 1) + '번홀 이글'));
-          }
-        });
-      }
+      pids.forEach(function (pid) {
+        var g = gross(round, pid, h);
+        if (g === null) return;
+        var d = g - round.pars[h];
+        if (d === -1) {
+          res.counts[pid].birdie++;
+          res.events.push({ hole: h, type: 'birdie', pid: pid });
+          if (opt.birdie) pay(pid, unit, (h + 1) + '번홀 버디');
+        } else if (d <= -2) {
+          res.counts[pid].eagle++;
+          res.events.push({ hole: h, type: 'eagle', pid: pid });
+          if (opt.birdie) pay(pid, unit * 2, (h + 1) + '번홀 이글');
+        }
+      });
     }
     return res;
   }
@@ -536,21 +538,29 @@
     return out;
   }
 
-  /** 라운드 설정에 따라 모든 게임을 계산 */
+  /**
+   * 모든 게임을 항상 계산한다 (개인 스코어 하나로 모든 버전의 결과가 나오도록).
+   * 각 게임의 enabled(정산 포함) 여부는 결과에 표시되며, 정산(transfers)에는 포함된 게임만 반영된다.
+   */
   function computeAll(round) {
     var g = round.games || {};
     var out = { transfers: [] };
-    out.stroke = strokePlay(round, g.stroke || {});
-    out.transfers = out.transfers.concat(out.stroke.transfers);
-    if (g.stableford && g.stableford.enabled) out.stableford = stableford(round, g.stableford);
-    if (g.skins && g.skins.enabled) { out.skins = skins(round, g.skins); out.transfers = out.transfers.concat(out.skins.transfers); }
-    if (g.match && g.match.enabled) { out.match = matchPlay(round, g.match); out.transfers = out.transfers.concat(out.match.transfers); }
-    if (g.nassau && g.nassau.enabled) { out.nassau = nassau(round, g.nassau); out.transfers = out.transfers.concat(out.nassau.transfers); }
-    if (g.bestball && g.bestball.enabled) { out.bestball = bestBall(round, g.bestball); out.transfers = out.transfers.concat(out.bestball.transfers); }
-    if (g.vegas && g.vegas.enabled) { out.vegas = vegas(round, g.vegas); out.transfers = out.transfers.concat(out.vegas.transfers); }
-    if (g.bonus && (g.bonus.nearest || g.bonus.longest || g.bonus.birdie)) {
-      out.bonus = bonuses(round, g.bonus); out.transfers = out.transfers.concat(out.bonus.transfers);
+    function add(key, res, included) {
+      res.enabled = !!included;
+      out[key] = res;
+      if (included && res.transfers && !res.error) out.transfers = out.transfers.concat(res.transfers);
     }
+    add('stroke', strokePlay(round, g.stroke || {}), true);
+    out.stableford = stableford(round, g.stableford || {});
+    add('skins', skins(round, g.skins || {}), g.skins && g.skins.enabled);
+    add('match', matchPlay(round, g.match || {}), g.match && g.match.enabled);
+    if (round.holes === 18) add('nassau', nassau(round, g.nassau || {}), g.nassau && g.nassau.enabled);
+    add('bestball', bestBall(round, g.bestball || {}), g.bestball && g.bestball.enabled);
+    add('vegas', vegas(round, g.vegas || {}), g.vegas && g.vegas.enabled);
+    var b = g.bonus || {};
+    var bonus = bonuses(round, b);
+    out.bonus = bonus;
+    if (b.nearest || b.longest || b.birdie) out.transfers = out.transfers.concat(bonus.transfers);
     out.settlement = settle(out.transfers, round.players);
     return out;
   }

@@ -174,6 +174,11 @@ test('bonuses: nearest/longest/birdie', () => {
   );
   const res = G.bonuses(r, { nearest: true, longest: true, birdie: true, unit: 1000 });
   assert.equal(res.counts.a.birdie, 1);
+  // 정산 제외 시에도 횟수는 계산되고 송금만 없다
+  const off = G.bonuses(r, { nearest: false, longest: false, birdie: false, unit: 1000 });
+  assert.equal(off.counts.a.birdie, 1);
+  assert.equal(off.counts.b.nearest, 1);
+  assert.equal(off.transfers.length, 0);
   const s = G.settle(res.transfers, r.players);
   const net = Object.fromEntries(s.rows.map(x => [x.id, x.net]));
   // each event: 2 others pay 1000 → +2000 for the winner, -1000 for each other
@@ -193,6 +198,11 @@ test('computeAll aggregates enabled games', () => {
   );
   const all = G.computeAll(r);
   assert.ok(all.skins && all.match && all.nassau && all.settlement);
+  // 켜지 않은 게임도 항상 계산되지만 정산에는 빠진다
+  assert.ok(all.bestball && all.vegas && all.bonus && all.stableford);
+  assert.equal(all.bestball.enabled, false);
+  assert.equal(all.skins.enabled, true);
+  assert.ok(all.vegas.error, '2:2 not possible with 2 players');
   assert.equal(all.settlement.rows[0].id, 'a');
   // stroke 18*100 + skins 18*1000 + match 10&8 → 10*1000 + nassau 3*5000
   assert.equal(all.settlement.rows[0].net, 1800 + 18000 + 10000 + 15000);

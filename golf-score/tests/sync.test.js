@@ -1,0 +1,242 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const G = require('../games.js');
+const S = require('../sync.js');
+
+const defaults = {
+  pars: G.defaultPars, strokeIndex: G.defaultStrokeIndex,
+  games: () => ({
+    stroke: { enabled: true, net: false, unit: 0 }, stableford: { enabled: true, net: true },
+    skins: { enabled: false, net: false, mode: 'individual', unit: 1000 }, match: { enabled: false, net: false, mode: 'individual', unit: 1000 },
+    nassau: { enabled: false, net: false, mode: 'individual', unit: 5000 }, bestball: { enabled: false, net: false, count: 1, unit: 1000 },
+    vegas: { enabled: false, net: false, unit: 100 }, bonus: { nearest: false, longest: false, birdie: false, unit: 1000 }
+  })
+};
+
+function mkRound() {
+  const r = {
+    id: 'r1', holes: 9, date: '2026-11-09', createdAt: 1000, name: '테스트',
+    pars: G.defaultPars(9), strokeIndex: G.defaultStrokeIndex(9),
+    players: [{ id: 'a', name: 'A', hcp: 0, team: 'A' }, { id: 'b', name: 'B', hcp: 5, team: 'B' }],
+    scores: { a: new Array(9).fill(null), b: new Array(9).fill(null) }, extras: {}, games: defaults.games(),
+    status: 'live', rev: {}, currentHole: 0, share: { host: 'host1' }
+  };
+  S.stampAll(r, 1000, 'host1');
+  return r;
+}
+
+test('room code generation, normalization and formatting', () => {
+  const c = S.randomCode();
+  assert.equal(c.length, 8);
+  assert.ok(S.isValidCode(c));
+  assert.equal(S.formatCode(c), c.slice(0, 4) + '-' + c.slice(4));
+  assert.equal(S.normalizeCode(' ab-cd 01xy'), 'ABCDOIXY');
+  assert.ok(!S.isValidCode('ABCD01XY'));
+  assert.ok(!S.isValidCode('ABCDEF'));
+});
+
+test('hybrid logical clock is monotonic and observes remote; maxRevTs seeds it', () => {
+  let t = 100;
+  const c = S.createClock(() => t);
+  assert.equal(c.now(), 100);
+  assert.equal(c.now(), 101);
+  c.observe(500);
+  assert.equal(c.now(), 501);
+  t = 1000;
+  assert.equal(c.now(), 1000);
+  const r = mkRound(); r.rev['score:a:0'] = { ts: 99999, by: 'x' };
+  assert.equal(S.maxRevTs(r), 99999);
+});
+
+test('exportKeys uses field-level keys and covers every mutable field', () => {
+  const r = mkRound();
+  r.scores.a[0] = 4; r.extras[2] = { nearest: 'b' };
+  S.stampAll(r, 1000, 'host1');
+  const keys = S.exportKeys(r);
+  assert.deepEqual(keys.meta.v.playerIds, ['a', 'b']);
+  assert.equal(keys.meta.v.holes, 9);
+  assert.equal(keys.name.v, '테스트');
+  assert.equal(keys.status.v, 'live');
+  assert.equal(keys['pl:a:name'].v, 'A');
+  assert.equal(keys['pl:b:hcp'].v, 5);
+  assert.equal(keys['pl:b:team'].v, 'B');
+  assert.equal(keys['gm:skins:unit'].v, 1000);
+  assert.equal(keys['gm:bestball:count'].v, 1);
+  assert.equal(keys['par:0'].v, 4);
+  assert.equal(keys['score:a:0'].v, 4);
+  assert.equal(keys['score:a:0'].ts, 1000);
+  assert.equal(keys['extra:2:nearest'].v, 'b');
+  assert.ok(!('extra:2:longest' in keys));
+  assert.ok(!('score:a:1' in keys), 'null scores without rev are not exported');
+  assert.ok(!('players' in keys) && !('games' in keys), 'no whole-object keys');
+});
+
+test('merge applies newer keys, keeps local newer ones, reports localNewer', () => {
+  const r = mkRound();
+  const clock = S.createClock(() => 5000);
+  r.scores.a[0] = 4; S.stamp(r, ['score:a:0'], clock, 'me');
+  const res = S.merge(r, {
+    'score:a:0': { v: 7, ts: 2000, by: 'other' },   // older → ignored
+    'score:b:0': { v: 5, ts: 3000, by: 'other' },   // newer than initial 1000 → applied
+    'par:0': { v: 5, ts: 1000, by: 'zzz' },         // tie on ts, by greater → applied
+    'pl:a:name': { v: 'A2', ts: 4000, by: 'other' },
+    'pl:b:team': { v: 'A', ts: 4000, by: 'other' },
+    'gm:skins:enabled': { v: true, ts: 4000, by: 'other' },
+    'status': { v: 'finished', ts: 6000, by: 'other' }
+  });
+  assert.equal(r.scores.a[0], 4);
+  assert.equal(r.scores.b[0], 5);
+  assert.equal(r.pars[0], 5);
+  assert.equal(r.players[0].name, 'A2');
+  assert.equal(r.players[1].team, 'A');
+  assert.equal(r.games.skins.enabled, true);
+  assert.equal(r.status, 'finished');
+  assert.ok(res.localNewer);
+  assert.ok(res.changed.includes('score:b:0') && !res.changed.includes('score:a:0'));
+  assert.equal(res.maxTs, 6000);
+});
+
+test('merge validates and rejects hostile or malformed input', () => {
+  const r = mkRound();
+  const res = S.merge(r, {
+    'score:a:99': { v: 4, ts: 9000, by: 'x' },               // hole out of range
+    'score:zzz:0': { v: 4, ts: 9000, by: 'x' },              // unknown player
+    'score:a:1': { v: '5', ts: 9000, by: 'x' },              // string → clamped int 5 (ok)
+    'score:a:2': { v: 99, ts: 9000, by: 'x' },               // clamp to 15
+    'par:-1': { v: 4, ts: 9000, by: 'x' },
+    'par:1': { v: 9, ts: 9000, by: 'x' },                    // clamp to 6
+    'si:0': { v: 50, ts: 9000, by: 'x' },                    // clamp to holes
+    'meta': { v: { id: 'other', holes: 18 }, ts: 9000, by: 'x' },
+    'pl:a:name': { v: '<img onerror=alert(1)>'.repeat(5), ts: 9000, by: 'x' },
+    'pl:a:hcp': { v: 999, ts: 9000, by: 'x' },
+    'pl:a:team': { v: 'Z', ts: 9000, by: 'x' },
+    'pl:a:bogus': { v: 1, ts: 9000, by: 'x' },
+    'gm:skins:mode': { v: 'hack', ts: 9000, by: 'x' },
+    'gm:skins:unit': { v: -5, ts: 9000, by: 'x' },
+    'gm:nope:unit': { v: 1, ts: 9000, by: 'x' },
+    'gm:skins:__proto__': { v: 1, ts: 9000, by: 'x' },
+    'extra:0:nearest': { v: 'nobody', ts: 9000, by: 'x' },
+    'extra:0:longest': { v: 'b', ts: 9000, by: 'x' },
+    'status': { v: 'hacked', ts: 9000, by: 'x' },
+    'players': { v: [], ts: 9000, by: 'x' },
+    'what:ever': { v: 1, ts: 9000, by: 'x' }
+  });
+  assert.equal(r.holes, 9);
+  assert.equal(r.id, 'r1');
+  assert.equal(r.scores.a[1], 5);
+  assert.equal(r.scores.a[2], 15);
+  assert.equal(r.pars[1], 6);
+  assert.equal(r.strokeIndex[0], 9);
+  assert.equal(r.players[0].name.length, 20);
+  assert.equal(r.players[0].hcp, 54);
+  assert.equal(r.players[0].team, 'A', 'invalid team rejected');
+  assert.equal(r.games.skins.mode, 'individual');
+  assert.equal(r.games.skins.unit, 0, 'negative money clamps to 0');
+  assert.ok(!r.games.nope);
+  assert.equal(r.status, 'live');
+  assert.ok(!r.scores.zzz);
+  assert.deepEqual(r.extras[0], { longest: 'b' }, 'rejected nearest leaves no trace');
+  assert.ok(!res.changed.includes('score:a:99') && !res.changed.includes('players') && !res.changed.includes('what:ever'));
+  assert.ok(Object.prototype.toString.call(r.games.skins) === '[object Object]');
+});
+
+test('extra tombstones: clearing propagates as null', () => {
+  const r = mkRound();
+  r.extras[1] = { nearest: 'a' }; S.stamp(r, ['extra:1:nearest'], S.createClock(() => 2000), 'me');
+  const res = S.merge(r, { 'extra:1:nearest': { v: null, ts: 3000, by: 'x' } });
+  assert.ok(!r.extras[1]);
+  assert.deepEqual(res.changed, ['extra:1:nearest']);
+  const keys = S.exportKeys(r);
+  assert.equal(keys['extra:1:nearest'].v, null, 'tombstone is still exported because it has a rev');
+});
+
+test('project/diffAndStamp detects local changes (including clears) and stamps only them', () => {
+  const r = mkRound();
+  const clock = S.createClock(() => 5000);
+  const base = S.project(r);
+  r.scores.a[0] = 4; r.pars[0] = 5; r.players[1].team = 'A'; r.games.skins.enabled = true;
+  r.extras[0] = { nearest: 'b' };
+  let d = S.diffAndStamp(r, base, clock, 'me');
+  assert.deepEqual(d.changed.sort(), ['extra:0:nearest', 'gm:skins:enabled', 'par:0', 'pl:b:team', 'score:a:0']);
+  assert.equal(r.rev['score:a:0'].ts, 5000);
+  assert.equal(r.rev['pl:a:name'].ts, 1000, 'untouched keys keep their rev');
+  // clear → tombstone is detected
+  delete r.extras[0]; r.scores.a[0] = null;
+  d = S.diffAndStamp(r, d.projection, clock, 'me');
+  assert.deepEqual(d.changed.sort(), ['extra:0:nearest', 'score:a:0']);
+  assert.equal(S.exportKeys(r)['score:a:0'].v, null);
+  // no change → nothing
+  d = S.diffAndStamp(r, d.projection, clock, 'me');
+  assert.deepEqual(d.changed, []);
+});
+
+test('roundFromSnapshot reconstructs a full round for a new participant', () => {
+  const r = mkRound();
+  r.scores.a[0] = 3; r.scores.b[0] = 5; r.pars[0] = 3; r.extras[0] = { nearest: 'a' }; r.games.vegas.enabled = true;
+  S.stampAll(r, 1000, 'host1');
+  S.stamp(r, ['score:a:0', 'score:b:0', 'par:0', 'extra:0:nearest', 'gm:vegas:enabled'], S.createClock(() => 2000), 'host1');
+  const snap = S.exportKeys(r);
+  const copy = S.roundFromSnapshot(snap, defaults);
+  assert.equal(copy.id, 'r1');
+  assert.equal(copy.holes, 9);
+  assert.equal(copy.name, '테스트');
+  assert.deepEqual(copy.players, r.players);
+  assert.equal(copy.scores.a[0], 3);
+  assert.equal(copy.scores.b[0], 5);
+  assert.equal(copy.scores.b.length, 9);
+  assert.equal(copy.pars[0], 3);
+  assert.deepEqual(copy.extras[0], { nearest: 'a' });
+  assert.equal(copy.games.vegas.enabled, true);
+  assert.equal(copy.share.host, 'host1');
+  const res = S.merge(copy, snap);
+  assert.deepEqual(res.changed, []);
+  assert.equal(res.localNewer, false);
+  assert.equal(S.hasKeysMissingFrom(copy, snap), false);
+  assert.deepEqual(S.exportKeys(copy), snap, 'replica exports identical keys');
+  copy.scores.b[4] = 6; S.stamp(copy, ['score:b:4'], S.createClock(() => 3000), 'guest');
+  assert.equal(S.hasKeysMissingFrom(copy, snap), true);
+  // 잘못된 meta는 거부
+  assert.equal(S.roundFromSnapshot({ meta: { v: { id: 'x', holes: 7, playerIds: ['a'] } } }, defaults), null);
+  assert.equal(S.roundFromSnapshot({}, defaults), null);
+});
+
+test('two replicas converge regardless of merge order', () => {
+  const a = mkRound(), b = S.roundFromSnapshot(S.exportKeys(mkRound()), defaults);
+  const ca = S.createClock(() => 5000), cb = S.createClock(() => 4000); // b의 시계가 느림
+  a.scores.a[0] = 4; S.stamp(a, ['score:a:0'], ca, 'A');
+  b.scores.a[0] = 6; S.stamp(b, ['score:a:0'], cb, 'B'); // 충돌: 같은 셀
+  b.scores.b[0] = 5; S.stamp(b, ['score:b:0'], cb, 'B');
+  b.players[0].team = 'B'; S.stamp(b, ['pl:a:team'], cb, 'B');
+  a.players[1].hcp = 9; S.stamp(a, ['pl:b:hcp'], ca, 'A'); // 동시에 다른 필드 편집 → 둘 다 보존
+  const snapA = S.exportKeys(a), snapB = S.exportKeys(b);
+  S.merge(a, snapB); S.merge(b, snapA);
+  assert.equal(a.scores.a[0], 4);
+  assert.equal(b.scores.a[0], 4);
+  assert.equal(a.scores.b[0], 5);
+  assert.equal(a.players[0].team, 'B');
+  assert.equal(b.players[1].hcp, 9);
+  assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
+});
+
+test('deriveRoom + seal/open roundtrip; wrong code fails; plaintext rejected', async () => {
+  assert.ok(S.cryptoAvailable());
+  const room = await S.deriveRoom('ABCDEFGH');
+  assert.ok(room.topic.startsWith(S.TOPIC_ROOT) && room.topic.length === S.TOPIC_ROOT.length + 32);
+  assert.ok(!room.topic.includes('ABCDEFGH'));
+  const other = await S.deriveRoom('ABCDEFGJ');
+  assert.notEqual(room.topic, other.topic);
+  const msg = { t: 'op', from: 'x', keys: { 'score:a:0': { v: 4, ts: 1, by: 'x' } } };
+  const sealed = await S.seal(room.key, msg);
+  assert.ok(sealed.startsWith('E2.'));
+  assert.deepEqual(await S.open(room.key, sealed), msg);
+  await assert.rejects(S.open(other.key, sealed));
+  await assert.rejects(S.open(room.key, 'P1.' + JSON.stringify(msg)), 'plaintext is not accepted');
+  await assert.rejects(S.seal(null, msg));
+});
+
+test('parseBrokerUrl', () => {
+  assert.deepEqual(S.parseBrokerUrl('wss://broker.emqx.io:8084/mqtt'), { protocol: 'wss', host: 'broker.emqx.io', port: 8084, path: '/mqtt' });
+  assert.deepEqual(S.parseBrokerUrl('ws://localhost:1884'), { protocol: 'ws', host: 'localhost', port: 1884, path: '/mqtt' });
+  assert.deepEqual(S.parseBrokerUrl('wss://mqtt.eclipseprojects.io:443/mqtt').port, 443);
+  assert.equal(S.parseBrokerUrl('http://x'), null);
+});

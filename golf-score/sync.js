@@ -1,0 +1,655 @@
+/*
+ * sync.js — 실시간 공유(동기화) 모듈
+ *  - 라운드를 필드 단위 key/value 맵으로 투영하고, 키별 last-writer-wins(하이브리드 논리 시계)로 병합
+ *  - 방 코드(8자리)에서 PBKDF2로 토픽과 AES-GCM 키를 함께 유도. 공개 MQTT 브로커(WebSocket)로 전송 (mqtt.js 필요)
+ *  - 브로커는 방 단위로 고정(자동 전환 없음). 늦게 참여한 기기는 retained 스냅샷 또는 hello 요청 응답으로 상태를 받음
+ * 브라우저(window.GolfSync)와 Node(require) 양쪽에서 사용 가능. 순수 로직은 Node 테스트로 검증.
+ */
+(function (root, factory) {
+  var api = factory();
+  root.GolfSync = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  var ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 0/O/1/I 제외, 32자
+  var CODE_LEN = 8;
+  var TOPIC_ROOT = 'golfscore/v2/';
+  var BROKERS = [
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://mqtt.eclipseprojects.io:443/mqtt',
+    'wss://broker.hivemq.com:8884/mqtt',
+    'wss://test.mosquitto.org:8081/mqtt'
+  ];
+  var TEAMS = ['A', 'B', 'C', 'D'];
+  var GAME_SCHEMA = {
+    stroke: { enabled: 'bool', net: 'bool', unit: 'money' },
+    stableford: { enabled: 'bool', net: 'bool' },
+    skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
+    match: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
+    nassau: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
+    bestball: { enabled: 'bool', net: 'bool', count: 'count', unit: 'money' },
+    vegas: { enabled: 'bool', net: 'bool', unit: 'money' },
+    bonus: { nearest: 'bool', longest: 'bool', birdie: 'bool', unit: 'money' }
+  };
+  var PRESENCE_INTERVAL = 25000;
+  var PRESENCE_TTL = 75000;
+  var OP_DEBOUNCE = 250;
+  var SNAP_DEBOUNCE = 2000;
+  var HYDRATE_GRACE = 2000;
+  var HELLO_REPLY_MIN = 200, HELLO_REPLY_SPREAD = 700;
+  var SKEW_WARN = 60000;
+
+  function cryptoObj() {
+    if (typeof globalThis !== 'undefined' && globalThis.crypto) return globalThis.crypto;
+    if (typeof self !== 'undefined' && self.crypto) return self.crypto;
+    return null;
+  }
+  function subtle() { var c = cryptoObj(); return c && c.subtle ? c.subtle : null; }
+  function cryptoAvailable() { return !!subtle(); }
+
+  // ───────────────────────── 방 코드 ─────────────────────────
+  function randomFrom(alpha, len) {
+    var c = cryptoObj(), out = '';
+    if (c && c.getRandomValues) {
+      var arr = new Uint8Array(len); c.getRandomValues(arr);
+      for (var i = 0; i < len; i++) out += alpha[arr[i] % alpha.length];
+    } else {
+      for (var k = 0; k < len; k++) out += alpha[Math.floor(Math.random() * alpha.length)];
+    }
+    return out;
+  }
+  function randomCode() { return randomFrom(ALPHABET, CODE_LEN); } // 32 % 256 == 0 → 균등
+  function randomId(len) { return randomFrom('abcdefghijklmnopqrstuvwxyz0123456789', len || 8); }
+  function normalizeCode(s) {
+    return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/0/g, 'O').replace(/1/g, 'I');
+  }
+  function isValidCode(s) {
+    if (!s || s.length !== CODE_LEN) return false;
+    for (var i = 0; i < s.length; i++) if (ALPHABET.indexOf(s[i]) < 0) return false;
+    return true;
+  }
+  function formatCode(s) { s = String(s || ''); return s.length === CODE_LEN ? s.slice(0, 4) + '-' + s.slice(4) : s; }
+
+  // ───────────────────────── 하이브리드 논리 시계 ─────────────────────────
+  function createClock(nowFn) {
+    nowFn = nowFn || function () { return Date.now(); };
+    var last = 0;
+    return {
+      now: function () { var t = nowFn(); if (t <= last) t = last + 1; last = t; return t; },
+      observe: function (ts) { if (typeof ts === 'number' && isFinite(ts) && ts > last) last = ts; },
+      peek: function () { return last; }
+    };
+  }
+  /** 라운드에 저장된 rev 중 최대 ts (재시작 후 시계 seed용) */
+  function maxRevTs(round) {
+    var m = 0, rev = (round && round.rev) || {};
+    Object.keys(rev).forEach(function (k) { if (rev[k] && rev[k].ts > m) m = rev[k].ts; });
+    return m;
+  }
+
+  // ───────────────────────── 값 검증 ─────────────────────────
+  function isInt(v) { return typeof v === 'number' && isFinite(v) && Math.floor(v) === v; }
+  function clampInt(v, lo, hi) { v = Math.round(Number(v)); if (!isFinite(v)) return null; return Math.min(hi, Math.max(lo, v)); }
+  function cleanStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max); }
+  function cleanPid(v) { return String(v == null ? '' : v).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24); }
+  function playerOf(round, pid) {
+    for (var i = 0; i < round.players.length; i++) if (round.players[i].id === pid) return round.players[i];
+    return null;
+  }
+  function validGameValue(type, v) {
+    switch (type) {
+      case 'bool': return typeof v === 'boolean' ? v : (v === 1 || v === 'true' ? true : v === 0 || v === 'false' ? false : undefined);
+      case 'money': { var m = clampInt(v, 0, 100000000); return m === null ? undefined : m; }
+      case 'mode': return v === 'individual' || v === 'team' ? v : undefined;
+      case 'count': return v === 1 || v === 2 ? v : undefined;
+    }
+    return undefined;
+  }
+
+  // ───────────────────────── 키 투영 ─────────────────────────
+  function ensureScores(round) {
+    round.scores = round.scores || {};
+    (round.players || []).forEach(function (p) {
+      if (!Array.isArray(round.scores[p.id]) || round.scores[p.id].length !== round.holes) {
+        var old = round.scores[p.id] || [];
+        var arr = new Array(round.holes).fill(null);
+        for (var i = 0; i < Math.min(old.length, round.holes); i++) arr[i] = old[i];
+        round.scores[p.id] = arr;
+      }
+    });
+  }
+
+  function metaOf(round) {
+    return {
+      id: round.id, holes: round.holes, date: round.date, createdAt: round.createdAt,
+      host: round.share ? round.share.host || null : null,
+      playerIds: (round.players || []).map(function (p) { return p.id; })
+    };
+  }
+
+  function getKey(round, key) {
+    var p = key.split(':');
+    switch (p[0]) {
+      case 'meta': return metaOf(round);
+      case 'name': return round.name == null ? '' : round.name;
+      case 'status': return round.status || 'live';
+      case 'pl': { var pl = playerOf(round, p[1]); if (!pl) return undefined; return p[2] === 'hcp' ? (Number(pl.hcp) || 0) : p[2] === 'team' ? (pl.team || '') : (pl.name || ''); }
+      case 'gm': { var g = round.games && round.games[p[1]]; return g ? g[p[2]] : undefined; }
+      case 'par': return round.pars[+p[1]];
+      case 'si': return round.strokeIndex[+p[1]];
+      case 'score': { var s = round.scores[p[1]]; var v = s ? s[+p[2]] : null; return isInt(v) ? v : null; }
+      case 'extra': { var e = round.extras && round.extras[+p[1]]; return e && e[p[2]] ? e[p[2]] : null; }
+    }
+    return undefined;
+  }
+
+  /** 값 검증 후 적용. 적용되면 true */
+  function setKey(round, key, v) {
+    var p = key.split(':');
+    var h;
+    switch (p[0]) {
+      case 'meta': return false; // 불변
+      case 'name': round.name = cleanStr(v, 60); return true;
+      case 'status': if (v === 'live' || v === 'finished' || v === 'closed') { round.status = v; return true; } return false;
+      case 'pl': {
+        var pl = playerOf(round, p[1]); if (!pl) return false;
+        if (p[2] === 'name') { pl.name = cleanStr(v, 20); return true; }
+        if (p[2] === 'hcp') { var hc = clampInt(v, 0, 54); if (hc === null) return false; pl.hcp = hc; return true; }
+        if (p[2] === 'team') { if (v === '' || v === null || TEAMS.indexOf(v) >= 0) { pl.team = v || ''; return true; } return false; }
+        return false;
+      }
+      case 'gm': {
+        var schema = GAME_SCHEMA[p[1]]; if (!schema || !schema[p[2]]) return false;
+        var gv = validGameValue(schema[p[2]], v); if (gv === undefined) return false;
+        round.games = round.games || {}; round.games[p[1]] = round.games[p[1]] || {};
+        round.games[p[1]][p[2]] = gv; return true;
+      }
+      case 'par': { h = +p[1]; var pv = clampInt(v, 3, 6); if (!(h >= 0 && h < round.holes) || pv === null) return false; round.pars[h] = pv; return true; }
+      case 'si': { h = +p[1]; var sv = clampInt(v, 1, round.holes); if (!(h >= 0 && h < round.holes) || sv === null) return false; round.strokeIndex[h] = sv; return true; }
+      case 'score': {
+        h = +p[2]; if (!(h >= 0 && h < round.holes) || !playerOf(round, p[1])) return false;
+        var sc = v === null || v === undefined ? null : clampInt(v, 1, 15);
+        if (sc === undefined) return false;
+        if (!round.scores[p[1]]) round.scores[p[1]] = new Array(round.holes).fill(null);
+        round.scores[p[1]][h] = sc; return true;
+      }
+      case 'extra': {
+        h = +p[1]; if (!(h >= 0 && h < round.holes) || (p[2] !== 'nearest' && p[2] !== 'longest')) return false;
+        var pid = v === null || v === undefined || v === '' ? null : cleanPid(v);
+        if (pid && !playerOf(round, pid)) return false;
+        round.extras = round.extras || {};
+        var cur = round.extras[h] || {};
+        cur[p[2]] = pid;
+        if (!cur.nearest && !cur.longest) delete round.extras[h]; else round.extras[h] = cur;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 라운드에 존재하는 모든 키 (값이 있거나 rev가 있는 것) */
+  function allKeys(round) {
+    var rev = round.rev || {};
+    var keys = ['meta', 'name', 'status'];
+    var h;
+    (round.players || []).forEach(function (p) { keys.push('pl:' + p.id + ':name', 'pl:' + p.id + ':hcp', 'pl:' + p.id + ':team'); });
+    Object.keys(GAME_SCHEMA).forEach(function (g) {
+      Object.keys(GAME_SCHEMA[g]).forEach(function (f) { if (round.games && round.games[g] && round.games[g][f] !== undefined) keys.push('gm:' + g + ':' + f); });
+    });
+    for (h = 0; h < round.holes; h++) keys.push('par:' + h, 'si:' + h);
+    (round.players || []).forEach(function (p) {
+      var s = round.scores && round.scores[p.id];
+      for (var i = 0; i < round.holes; i++) {
+        var k = 'score:' + p.id + ':' + i;
+        if ((s && isInt(s[i])) || rev[k]) keys.push(k);
+      }
+    });
+    for (h = 0; h < round.holes; h++) {
+      var e = round.extras && round.extras[h];
+      ['nearest', 'longest'].forEach(function (f) {
+        var k = 'extra:' + h + ':' + f;
+        if ((e && e[f]) || rev[k]) keys.push(k);
+      });
+    }
+    return keys;
+  }
+
+  /** 모든 키를 {v, ts, by} 형태로 내보내기 */
+  function exportKeys(round, onlyKeys) {
+    var rev = round.rev || {};
+    var out = {};
+    (onlyKeys || allKeys(round)).forEach(function (k) {
+      var v = getKey(round, k);
+      if (v === undefined) return;
+      // meta는 불변이므로 rev와 무관하게 생성 시각으로 고정 (복제본 간 동일하게 내보내기 위함)
+      var r = k === 'meta' ? { ts: round.createdAt || 1, by: '' } : (rev[k] || { ts: 0, by: '' });
+      out[k] = { v: v, ts: r.ts, by: r.by };
+    });
+    return out;
+  }
+
+  /** 공유용 투영: key → JSON 문자열 (meta 제외). 변경 감지용 */
+  function project(round) {
+    var out = {};
+    allKeys(round).forEach(function (k) {
+      if (k === 'meta') return;
+      var v = getKey(round, k);
+      if (v !== undefined) out[k] = JSON.stringify(v);
+    });
+    return out;
+  }
+
+  /** baseline 투영과 비교해 바뀐 키에 rev를 찍는다. 반환 {changed, projection} */
+  function diffAndStamp(round, baseline, clock, by) {
+    var cur = project(round), changed = [];
+    Object.keys(cur).forEach(function (k) { if (!baseline || baseline[k] !== cur[k]) changed.push(k); });
+    if (baseline) Object.keys(baseline).forEach(function (k) { if (!(k in cur)) changed.push(k); });
+    if (changed.length) stamp(round, changed, clock, by);
+    return { changed: changed, projection: cur };
+  }
+
+  /** rev가 없는 키에 기본 타임스탬프 부여 (공유 시작 시 / 라운드 생성 시) */
+  function stampAll(round, ts, by) {
+    round.rev = round.rev || {};
+    allKeys(round).forEach(function (k) {
+      if (k !== 'meta' && !round.rev[k]) round.rev[k] = { ts: ts, by: by };
+    });
+  }
+
+  /** 로컬 변경 표시: rev 갱신 */
+  function stamp(round, keys, clock, by) {
+    round.rev = round.rev || {};
+    var ts = clock.now();
+    keys.forEach(function (k) { if (k !== 'meta') round.rev[k] = { ts: ts, by: by }; });
+    return ts;
+  }
+
+  function newer(inc, loc) {
+    if (inc.ts !== loc.ts) return inc.ts > loc.ts;
+    return String(inc.by || '') > String(loc.by || '');
+  }
+  var KEY_RE = /^(meta|name|status|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:\d{1,2}|si:\d{1,2}|score:[A-Za-z0-9_-]{1,24}:\d{1,2}|extra:\d{1,2}:(nearest|longest))$/;
+
+  /**
+   * 들어온 키들을 LWW로 병합. 반환: {changed:[키], localNewer:bool, maxTs}
+   * opts.force: 비교 없이 모두 적용 (새로 참여해 스냅샷을 채택할 때)
+   */
+  function merge(round, keys, opts) {
+    opts = opts || {};
+    round.rev = round.rev || {};
+    var changed = [], localNewer = false, maxTs = 0;
+    Object.keys(keys || {}).forEach(function (k) {
+      var inc = keys[k];
+      if (!inc || typeof inc !== 'object' || !KEY_RE.test(k)) return;
+      if (typeof inc.ts === 'number' && isFinite(inc.ts) && inc.ts > maxTs) maxTs = inc.ts;
+      if (k === 'meta') return;
+      var loc = round.rev[k] || { ts: 0, by: '' };
+      var incRev = { ts: typeof inc.ts === 'number' && isFinite(inc.ts) ? inc.ts : 0, by: cleanStr(inc.by, 32) };
+      if (opts.force || newer(incRev, loc)) {
+        if (setKey(round, k, inc.v)) {
+          round.rev[k] = incRev;
+          changed.push(k);
+        }
+      } else if (loc.ts !== incRev.ts || String(loc.by) !== String(incRev.by)) {
+        localNewer = true;
+      }
+    });
+    return { changed: changed, localNewer: localNewer, maxTs: maxTs };
+  }
+
+  /** 스냅샷에 없는, 로컬에서 변경된 키가 있는지 */
+  function hasKeysMissingFrom(round, keys) {
+    var rev = round.rev || {};
+    var mine = allKeys(round);
+    for (var i = 0; i < mine.length; i++) {
+      var k = mine[i];
+      if (k !== 'meta' && rev[k] && rev[k].ts > 0 && !(k in keys)) return true;
+    }
+    return false;
+  }
+
+  /** 스냅샷으로부터 새 라운드 생성 (참여자가 처음 들어올 때) */
+  function roundFromSnapshot(keys, defaults) {
+    var meta = keys && keys.meta && keys.meta.v;
+    if (!meta || !(meta.holes === 9 || meta.holes === 18) || !Array.isArray(meta.playerIds)) return null;
+    var ids = [];
+    meta.playerIds.forEach(function (id) { id = cleanPid(id); if (id && ids.indexOf(id) < 0 && ids.length < 8) ids.push(id); });
+    if (ids.length < 1) return null;
+    var r = {
+      id: cleanStr(meta.id, 40) || randomId(8), holes: meta.holes, date: cleanStr(meta.date, 10), createdAt: Number(meta.createdAt) || Date.now(),
+      name: '', pars: defaults.pars(meta.holes), strokeIndex: defaults.strokeIndex(meta.holes),
+      players: ids.map(function (id) { return { id: id, name: '', hcp: 0, team: '' }; }),
+      scores: {}, extras: {}, games: defaults.games(), status: 'live', rev: {}, currentHole: 0,
+      share: { host: cleanPid(meta.host) || null }
+    };
+    ensureScores(r);
+    merge(r, keys, { force: true });
+    return r;
+  }
+
+  // ───────────────────────── 인코딩 / 암호화 ─────────────────────────
+  function utf8(s) { return new TextEncoder().encode(s); }
+  function unutf8(b) { return new TextDecoder().decode(b); }
+  function toB64(u8) {
+    var s = '';
+    for (var i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  function fromB64(str) {
+    var bin = atob(str), out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function hex(u8) { var s = ''; for (var i = 0; i < u8.length; i++) s += (u8[i] < 16 ? '0' : '') + u8[i].toString(16); return s; }
+
+  var roomCache = {};
+  /** 코드 → {topic, key}. PBKDF2(150k)로 토픽 식별자와 AES 키를 함께 유도 (무차별 대입 비용 상승) */
+  function deriveRoom(code) {
+    var st = subtle();
+    if (!st) return Promise.reject(new Error('crypto unavailable'));
+    if (roomCache[code]) return roomCache[code];
+    roomCache[code] = st.importKey('raw', utf8(code), 'PBKDF2', false, ['deriveBits']).then(function (k) {
+      return st.deriveBits({ name: 'PBKDF2', salt: utf8('golfscore/v2'), iterations: 150000, hash: 'SHA-256' }, k, 384);
+    }).then(function (bits) {
+      var u8 = new Uint8Array(bits);
+      return st.importKey('raw', u8.slice(16, 48), 'AES-GCM', false, ['encrypt', 'decrypt']).then(function (key) {
+        return { topic: TOPIC_ROOT + hex(u8.slice(0, 16)), key: key };
+      });
+    });
+    roomCache[code].catch(function () { delete roomCache[code]; });
+    return roomCache[code];
+  }
+  function seal(key, obj) {
+    if (!key) return Promise.reject(new Error('no key'));
+    var json = JSON.stringify(obj);
+    var iv = new Uint8Array(12); cryptoObj().getRandomValues(iv);
+    return subtle().encrypt({ name: 'AES-GCM', iv: iv }, key, utf8(json)).then(function (ct) {
+      return 'E2.' + toB64(iv) + '.' + toB64(new Uint8Array(ct));
+    });
+  }
+  function open(key, str) {
+    str = String(str || '');
+    if (str.indexOf('E2.') !== 0 || !key) return Promise.reject(new Error('unknown payload format'));
+    var parts = str.split('.');
+    if (parts.length !== 3) return Promise.reject(new Error('bad payload'));
+    return subtle().decrypt({ name: 'AES-GCM', iv: fromB64(parts[1]) }, key, fromB64(parts[2])).then(function (pt) {
+      return JSON.parse(unutf8(new Uint8Array(pt)));
+    });
+  }
+
+  function parseBrokerUrl(u) {
+    var m = /^(wss?):\/\/([^/:]+)(?::(\d+))?(\/.*)?$/.exec(String(u).trim());
+    if (!m) return null;
+    return { protocol: m[1], host: m[2], port: m[3] ? Number(m[3]) : (m[1] === 'wss' ? 443 : 80), path: m[4] || '/mqtt' };
+  }
+
+  // ───────────────────────── 세션 (전송 계층) ─────────────────────────
+  /**
+   * opts: { mqtt, code, broker(url), clientId(기기 id), tabId?, name, clock?, getRound,
+   *         onApply(changedKeys, msg), onSnapshot(keys), onStatus(status, detail), onPeers(list),
+   *         onReady(), onError(err), onConflict(meta), onSkew(ms) }
+   * 상태: connecting | connected | offline | idle | error
+   */
+  function createSession(opts) {
+    var mqtt = opts.mqtt, code = opts.code, clientId = opts.clientId;
+    var tabId = opts.tabId || randomId(4);
+    var broker = parseBrokerUrl(opts.broker || BROKERS[0]);
+    var clock = opts.clock || createClock();
+    var client = null, topic = null, cryptoKey = null, stopped = false, status = 'idle';
+    var pending = {}, dirty = false, opTimer = null, snapTimer = null, presenceTimer = null, hydrateTimer = null, helloTimer = null;
+    var peers = {}, displayName = opts.name || '';
+    var hydrated = false, gotRetained = false, ready = false, lastSyncAt = 0, reconnectPeriod = 2000;
+    var seenHello = {};
+
+    function setStatus(s, detail) { status = s; if (opts.onStatus) opts.onStatus(s, detail); }
+    function peerList() {
+      var now = Date.now(), out = [];
+      Object.keys(peers).forEach(function (cid) {
+        if (now - peers[cid].seen <= PRESENCE_TTL) out.push({ id: cid, name: peers[cid].name });
+        else delete peers[cid];
+      });
+      return out;
+    }
+    function emitPeers() { if (opts.onPeers) opts.onPeers(peerList()); }
+    function isConnected() { return !!(client && client.connected); }
+    function currentRound() { var r = opts.getRound(); return r || null; }
+
+    function rawPublish(sub, payload, pubOpts) {
+      return new Promise(function (resolve) {
+        if (!isConnected()) return resolve(false);
+        client.publish(topic + sub, payload, pubOpts, function (err) {
+          if (err && opts.onError) opts.onError(err);
+          resolve(!err);
+        });
+      });
+    }
+    function publish(sub, obj, pubOpts) {
+      if (!isConnected() || !topic) return Promise.resolve(false);
+      return seal(cryptoKey, obj).then(function (payload) { return rawPublish(sub, payload, pubOpts); })
+        .catch(function (e) { if (opts.onError) opts.onError(e); return false; });
+    }
+
+    function publishPresence() {
+      if (!isConnected()) return;
+      publish('/p/' + clientId, { name: displayName, ts: Date.now() }, { qos: 0, retain: true });
+    }
+
+    function publishSnapshot(extra) {
+      var round = currentRound();
+      if (!round || !isConnected()) return Promise.resolve(false);
+      var msg = { t: 'snap', rid: round.id, from: clientId, keys: exportKeys(round) };
+      if (extra) Object.keys(extra).forEach(function (k) { msg[k] = extra[k]; });
+      return publish('/s', msg, { qos: 1, retain: true }).then(function (ok) {
+        if (ok) { dirty = false; lastSyncAt = Date.now(); if (!ready) { ready = true; if (opts.onReady) opts.onReady(); } }
+        return ok;
+      });
+    }
+    function scheduleSnapshot(delay) {
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(function () {
+        snapTimer = null;
+        if (!hydrated || !isConnected()) { dirty = true; return; }
+        publishSnapshot();
+      }, delay == null ? SNAP_DEBOUNCE : delay);
+    }
+    function flushOps() {
+      opTimer = null;
+      var round = currentRound();
+      var keys = Object.keys(pending);
+      if (!round || !keys.length) return;
+      if (!hydrated || !isConnected()) { dirty = true; return; } // 재접속 후 스냅샷으로 전달
+      pending = {};
+      publish('/s', { t: 'op', rid: round.id, from: clientId, keys: exportKeys(round, keys) }, { qos: 1, retain: false })
+        .then(function (ok) { if (ok) lastSyncAt = Date.now(); });
+    }
+
+    /** 로컬에서 keys가 (이미 rev가 찍힌 채로) 변경되었음을 알림 → 전송 예약 */
+    function markDirty(keys) {
+      if (!keys || !keys.length) return;
+      keys.forEach(function (k) { pending[k] = 1; });
+      dirty = true;
+      if (!opTimer) opTimer = setTimeout(flushOps, OP_DEBOUNCE);
+      scheduleSnapshot();
+    }
+    /** rev를 찍고 전송 예약 (명시적 변경 경로용) */
+    function touch(keys) {
+      var round = currentRound();
+      if (!round) return;
+      stamp(round, keys, clock, clientId);
+      markDirty(keys);
+    }
+
+    function onHydrated() {
+      hydrated = true;
+      var round = currentRound();
+      if (round && (!gotRetained || dirty)) publishSnapshot(); // 브로커에 스냅샷이 없거나 로컬 변경이 쌓였으면 재시드
+      if (Object.keys(pending).length) flushOps();
+    }
+
+    function sendHello() {
+      if (!isConnected()) return;
+      var n = randomId(6);
+      publish('/q', { t: 'hello', from: clientId, n: n }, { qos: 1, retain: false });
+    }
+
+    function onMessage(t, payload, packet) {
+      if (!topic || t.indexOf(topic) !== 0) return;
+      var suffix = t.slice(topic.length);
+      var text = typeof payload === 'string' ? payload : (payload && payload.length ? unutf8(payload) : '');
+      var retained = !!(packet && packet.retain);
+      if (suffix.indexOf('/p/') === 0) {
+        var cid = suffix.slice(3);
+        if (cid === clientId) return;
+        if (!text) { delete peers[cid]; emitPeers(); return; }
+        open(cryptoKey, text).then(function (m) {
+          peers[cid] = { name: cleanStr(m && m.name, 20), seen: Date.now() };
+          emitPeers();
+        }).catch(function () { /* 다른 방/버전의 메시지 무시 */ });
+        return;
+      }
+      if (suffix === '/q') {
+        if (!text) return;
+        open(cryptoKey, text).then(function (m) {
+          if (!m || m.t !== 'hello' || m.from === clientId) return;
+          var round = currentRound(); if (!round) return;
+          var n = cleanStr(m.n, 12);
+          // 다른 기기가 먼저 응답하면 생략. 무작위 지연으로 응답 폭주 방지
+          var delay = HELLO_REPLY_MIN + Math.floor(Math.random() * HELLO_REPLY_SPREAD);
+          setTimeout(function () {
+            if (seenHello[n] || !isConnected()) return;
+            seenHello[n] = 1;
+            publishSnapshot({ re: n });
+          }, delay);
+        }).catch(function () { /* ignore */ });
+        return;
+      }
+      if (suffix !== '/s') return;
+      if (!text) { // 호스트가 서버에서 삭제함 (빈 retained)
+        if (retained) { gotRetained = false; }
+        return;
+      }
+      open(cryptoKey, text).then(function (msg) {
+        if (!msg || !msg.keys || typeof msg.keys !== 'object') return;
+        if (msg.re) seenHello[cleanStr(msg.re, 12)] = 1;
+        if (msg.from === clientId) return;
+        var maxTs = 0;
+        Object.keys(msg.keys).forEach(function (k) { var e = msg.keys[k]; if (e && typeof e.ts === 'number' && isFinite(e.ts)) { clock.observe(e.ts); if (e.ts > maxTs) maxTs = e.ts; } });
+        if (maxTs - Date.now() > SKEW_WARN && opts.onSkew) opts.onSkew(maxTs - Date.now());
+        var round = currentRound();
+        var meta = msg.keys.meta && msg.keys.meta.v;
+        var rid = msg.rid || (meta && meta.id);
+        if (!round) {
+          if (msg.t === 'snap' && meta) { if (retained) gotRetained = true; hydrated = true; if (opts.onSnapshot) opts.onSnapshot(msg.keys); }
+          return;
+        }
+        if (rid && round.id && rid !== round.id) { if (opts.onConflict) opts.onConflict(meta || { id: rid }); return; }
+        if (meta && meta.holes && meta.holes !== round.holes) { if (opts.onConflict) opts.onConflict(meta); return; }
+        var res = merge(round, msg.keys);
+        lastSyncAt = Date.now();
+        if (msg.t === 'snap') {
+          if (retained) { gotRetained = true; if (!hydrated) { clearTimeout(hydrateTimer); hydrated = true; } }
+          // 내 쪽이 더 새롭거나 스냅샷에 없는 키가 있으면 병합본을 다시 올림 (지터로 폭주 방지)
+          if (res.localNewer || hasKeysMissingFrom(round, msg.keys)) scheduleSnapshot(1000 + Math.floor(Math.random() * 2000));
+          if (hydrated && Object.keys(pending).length) flushOps();
+        }
+        if (res.changed.length && opts.onApply) opts.onApply(res.changed, msg);
+      }).catch(function () { /* 복호화 실패: 다른 코드/버전 → 무시 */ });
+    }
+
+    function start() {
+      if (stopped) return Promise.resolve();
+      if (!broker) { setStatus('error', 'bad broker'); return Promise.resolve(); }
+      setStatus('connecting', broker.host);
+      return deriveRoom(code).then(function (room) {
+        topic = room.topic; cryptoKey = room.key;
+        if (stopped) return;
+        var connOpts = {
+          clientId: 'gs' + String(clientId).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) + tabId.replace(/[^A-Za-z0-9]/g, '').slice(0, 6),
+          clean: true, keepalive: 30, reschedulePings: true, reconnectPeriod: reconnectPeriod, connectTimeout: 8000, protocolVersion: 4,
+          resubscribe: true, queueQoSZero: false,
+          protocol: broker.protocol, host: broker.host, port: broker.port, path: broker.path,
+          will: { topic: topic + '/p/' + clientId, payload: '', qos: 0, retain: true }
+        };
+        client = mqtt.connect(connOpts);
+        client.on('connect', function () {
+          reconnectPeriod = 2000; client.options.reconnectPeriod = reconnectPeriod;
+          hydrated = false; gotRetained = false;
+          setStatus('connected', broker.host);
+          client.subscribe(topic + '/#', { qos: 1 }, function (err) {
+            if (err) { if (opts.onError) opts.onError(err); return; }
+            if (!currentRound()) sendHello(); // 참여자: 스냅샷 요청
+          });
+          publishPresence();
+          clearInterval(presenceTimer);
+          presenceTimer = setInterval(publishPresence, PRESENCE_INTERVAL);
+          clearTimeout(hydrateTimer);
+          hydrateTimer = setTimeout(function () { if (!hydrated) onHydrated(); else if (currentRound() && (dirty || !gotRetained)) publishSnapshot(); }, HYDRATE_GRACE);
+        });
+        client.on('reconnect', function () { setStatus('connecting', broker.host); });
+        client.on('offline', function () { if (!stopped) setStatus('offline'); });
+        client.on('close', function () {
+          clearInterval(presenceTimer); clearTimeout(hydrateTimer); hydrated = false;
+          if (stopped) return;
+          // 수동 백오프 (지터 포함, 최대 15초)
+          reconnectPeriod = Math.min(15000, Math.round(reconnectPeriod * 1.6) + Math.floor(Math.random() * 700));
+          if (client) client.options.reconnectPeriod = reconnectPeriod;
+          setStatus('offline');
+        });
+        client.on('error', function (e) { if (opts.onError) opts.onError(e); });
+        client.on('message', onMessage);
+      }).catch(function (e) { setStatus('error', e && e.message); if (opts.onError) opts.onError(e); });
+    }
+
+    /** 포그라운드 복귀/온라인 복귀 시: 죽은 소켓을 즉시 재연결 */
+    function wake() {
+      if (!client || stopped) return;
+      try { reconnectPeriod = 2000; client.options.reconnectPeriod = reconnectPeriod; client.reconnect(); setStatus('connecting', broker.host); } catch (e) { /* ignore */ }
+    }
+
+    /** 서버의 retained 스냅샷/내 presence 삭제 (호스트가 공유 종료 시) */
+    function clearRetained() {
+      if (!isConnected()) return Promise.resolve(false);
+      return rawPublish('/s', '', { qos: 1, retain: true }).then(function () { return rawPublish('/p/' + clientId, '', { qos: 0, retain: true }); });
+    }
+
+    function stop() {
+      stopped = true;
+      clearTimeout(opTimer); clearTimeout(snapTimer); clearInterval(presenceTimer); clearTimeout(hydrateTimer); clearTimeout(helloTimer);
+      if (client) {
+        var c = client; client = null;
+        try { if (c.connected) c.publish(topic + '/p/' + clientId, '', { qos: 0, retain: true }); } catch (e) { /* ignore */ }
+        try { c.end(false); } catch (e2) { /* ignore */ }
+      }
+      setStatus('idle');
+    }
+
+    return {
+      start: start, stop: stop, wake: wake, touch: touch, markDirty: markDirty,
+      publishSnapshot: function () { return publishSnapshot(); },
+      clearRetained: clearRetained,
+      flush: function () { clearTimeout(opTimer); opTimer = null; pending = {}; clearTimeout(snapTimer); snapTimer = null; return publishSnapshot(); },
+      requestSnapshot: sendHello,
+      setName: function (n) { displayName = n || ''; publishPresence(); },
+      peers: peerList,
+      status: function () { return status; },
+      connected: isConnected,
+      hydrated: function () { return hydrated; },
+      ready: function () { return ready; },
+      lastSyncAt: function () { return lastSyncAt; },
+      broker: function () { return broker; },
+      clock: clock
+    };
+  }
+
+  return {
+    ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, TEAMS: TEAMS,
+    cryptoAvailable: cryptoAvailable,
+    randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,
+    createClock: createClock, maxRevTs: maxRevTs,
+    getKey: getKey, setKey: setKey, allKeys: allKeys, exportKeys: exportKeys, project: project, diffAndStamp: diffAndStamp,
+    stampAll: stampAll, stamp: stamp, merge: merge, hasKeysMissingFrom: hasKeysMissingFrom, roundFromSnapshot: roundFromSnapshot, ensureScores: ensureScores,
+    deriveRoom: deriveRoom, seal: seal, open: open, parseBrokerUrl: parseBrokerUrl,
+    createSession: createSession
+  };
+});

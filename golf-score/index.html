@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#1d6b3a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="description" content="골프 스코어 & 내기 게임 계산기 — 스트로크, 스테이블포드, 스킨스, 매치플레이, 나소, 베스트볼, 라스베가스, 니어/롱기/버디 보너스, 자동 정산" />
+  <meta name="description" content="골프 스코어 & 내기 게임 계산기 — 개인 스코어 하나로 스킨스, 매치플레이, 나소, 베스트볼, 라스베가스, 보너스까지 자동 계산·정산. 동반자와 실시간 공유" />
   <title>골프 스코어</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
@@ -16,6 +16,7 @@
 <body>
   <div id="app" class="app"></div>
   <script src="games.js"></script>
+  <script src="sync.js"></script>
   <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {

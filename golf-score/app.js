@@ -324,6 +324,8 @@
   function cancelJoin() { scan = null; closeSession(); state.joining = null; go('home'); }
 
   function statusLabel() {
+    if (navigator.onLine === false) return '오프라인 — 입력은 저장되고 연결되면 자동으로 맞춰져요';
+    if (syncStatus === 'error') return '연결 오류 — 다시 시도해 주세요';
     if (syncStatus === 'connected') return peers.length ? '실시간 연결됨 · 함께 보는 중 ' + (peers.length + 1) + '명' : '실시간 연결됨 · 아직 상대 없음';
     if (syncStatus === 'connecting' || syncStatus === 'loading' || (syncStatus === 'offline' && Date.now() - fgAt < 5000)) return '연결 중…';
     if (syncStatus === 'offline') return '오프라인 — 입력은 저장되고 연결되면 자동으로 맞춰져요';
@@ -337,9 +339,10 @@
       return (forView === 'play' && !state.readOnly) ? '<button class="iconbtn" data-action="go" data-view="share">👥 함께</button>' : '';
     }
     var cls, label;
-    if (syncStatus === 'connected') { cls = 'connected'; label = '● ' + (peers.length + 1) + '명'; }
+    if (navigator.onLine === false) { cls = 'offline'; label = '✕ 오프라인'; }
+    else if (syncStatus === 'connected') { cls = 'connected'; label = '● ' + (peers.length + 1) + '명'; }
     else if (syncStatus === 'connecting' || syncStatus === 'loading' || (syncStatus === 'offline' && Date.now() - fgAt < 5000)) { cls = 'connecting'; label = '○ 연결 중'; }
-    else if (syncStatus === 'failed' || syncStatus === 'nolib' || syncStatus === 'nocrypto') { cls = 'offline'; label = '! 연결 실패'; }
+    else if (syncStatus === 'failed' || syncStatus === 'nolib' || syncStatus === 'nocrypto' || syncStatus === 'error') { cls = 'offline'; label = '! 연결 실패'; }
     else { cls = 'offline'; label = '✕ 오프라인'; }
     return '<button class="iconbtn pill ' + cls + '" data-action="go" data-view="share" title="' + esc(statusLabel()) + '">' + label + '</button>';
   }
@@ -461,7 +464,7 @@
     if (sharingActive()) {
       var code = r.share.code, link = shareLink(code, r.share.broker || 0);
       var preparing = !syncReady && (syncStatus === 'connecting' || syncStatus === 'loading' || syncStatus === 'connected' || !!scan);
-      var failed = syncStatus === 'failed' || syncStatus === 'nolib' || syncStatus === 'nocrypto';
+      var failed = syncStatus === 'failed' || syncStatus === 'nolib' || syncStatus === 'nocrypto' || syncStatus === 'error';
       html += '<div class="card center"><div class="muted small">방 코드</div><div class="code-big">' + esc(S.formatCode(code)) + '</div>';
       if (failed) {
         html += '<div class="error" style="margin-top:8px;text-align:left">' + esc(statusLabel()) + '<div class="row" style="margin-top:8px"><button class="btn sm primary" data-action="retry-sharing">다시 연결</button><button class="btn sm" data-action="reshare-new-code">새 코드로 다시 공유</button></div></div>';
@@ -1209,6 +1212,7 @@
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') wakeSession(); });
   window.addEventListener('pageshow', function (e) { if (e.persisted) wakeSession(); });
   window.addEventListener('online', wakeSession);
+  window.addEventListener('offline', function () { softRender(); });
   window.addEventListener('beforeunload', function () { if (session) session.stop(); });
   setInterval(function () { if (sharingActive() && state.view === 'share') softRender(); }, 10000); // '마지막 동기화 n초 전' 갱신
 

@@ -240,3 +240,65 @@ test('parseBrokerUrl', () => {
   assert.deepEqual(S.parseBrokerUrl('wss://mqtt.eclipseprojects.io:443/mqtt').port, 443);
   assert.equal(S.parseBrokerUrl('http://x'), null);
 });
+
+// ───── 코드 리뷰에서 확인된 결함의 회귀 테스트 ─────
+
+test('open() never throws synchronously: malformed base64 is a rejection', async () => {
+  const room = await S.deriveRoom('ABCDEFGH');
+  let threw = false, p;
+  try { p = S.open(room.key, 'E2.!!!.x'); } catch (e) { threw = true; }
+  assert.equal(threw, false, 'must return a promise, not throw');
+  await assert.rejects(p);
+  await assert.rejects(S.open(room.key, 'E2.!.!'));
+  await assert.rejects(S.open(room.key, 'E2.' + 'AAAA' + '.' + 'AAAA'), 'bad iv length');
+});
+
+test('reserved property names are not valid player ids', () => {
+  assert.equal(S.cleanPid('__proto__'), '');
+  assert.equal(S.cleanPid('constructor'), '');
+  assert.equal(S.cleanPid('abc_1-2'), 'abc_1-2');
+  const keys = S.exportKeys(mkRound());
+  keys.meta.v.playerIds = ['__proto__', 'a', 'b'];
+  keys['pl:__proto__:name'] = { v: 'x', ts: 1000, by: 'h' };
+  keys['score:__proto__:0'] = { v: 5, ts: 1000, by: 'h' };
+  const r = S.roundFromSnapshot(keys, defaults);
+  assert.deepEqual(r.players.map(p => p.id), ['a', 'b']);
+  assert.equal(Object.getPrototypeOf(r.scores), Object.prototype);
+  assert.equal(S.merge(r, { 'score:__proto__:1': { v: 5, ts: 9999, by: 'h' } }).changed.length, 0);
+  // 이미 저장된 라운드에 들어 있던 예약어 id도 ensureScores에서 걸러짐
+  const bad = mkRound(); bad.players.push({ id: '__proto__', name: 'x', hcp: 0, team: '' });
+  S.ensureScores(bad);
+  assert.deepEqual(bad.players.map(p => p.id), ['a', 'b']);
+});
+
+test('clock and merge ignore implausibly far-future timestamps', () => {
+  const now = 1_700_000_000_000;
+  const c = S.createClock(() => now);
+  c.observe(now + S.MAX_FUTURE + 1);
+  assert.equal(c.now(), now, 'poisoned ts must not pin the clock');
+  c.observe(now + 60_000);
+  assert.equal(c.now(), now + 60_001, 'ordinary skew is still observed');
+  const r = mkRound();
+  const res = S.merge(r, { 'score:a:0': { v: 4, ts: 9e15, by: 'x' }, 'score:b:0': { v: 5, ts: 2000, by: 'x' } }, { now: () => now });
+  assert.deepEqual(res.changed, ['score:b:0']);
+  assert.equal(res.dropped, 1);
+  assert.equal(r.scores.a[0], null);
+  assert.equal(r.rev['score:a:0'], undefined, 'no rev is stored for the dropped key');
+});
+
+test('local writes are canonicalized like remote setKey so replicas converge (fractional SI, negative money)', () => {
+  const a = mkRound(), b = S.roundFromSnapshot(S.exportKeys(mkRound()), defaults);
+  const clock = S.createClock(() => 5000);
+  let base = S.project(a);
+  a.strokeIndex[2] = 3.5; a.games.skins.unit = -1000; a.players[1].hcp = 7.5; a.name = 'x'.repeat(100);
+  const d = S.diffAndStamp(a, base, clock, 'A');
+  assert.deepEqual(d.changed.sort(), ['gm:skins:unit', 'name', 'pl:b:hcp', 'si:2']);
+  assert.equal(a.strokeIndex[2], 4);
+  assert.equal(a.games.skins.unit, 0);
+  assert.equal(a.players[1].hcp, 8);
+  assert.equal(a.name.length, 60);
+  assert.equal(d.projection['si:2'], '4', 'projection reflects the canonical value');
+  S.merge(b, S.exportKeys(a, d.changed));
+  assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
+  assert.deepEqual(G.strokesPerHole(4, 9, a.strokeIndex), G.strokesPerHole(4, 9, b.strokeIndex));
+});

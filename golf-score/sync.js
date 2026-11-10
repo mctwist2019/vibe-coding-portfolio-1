@@ -39,6 +39,8 @@
   var HYDRATE_GRACE = 2000;
   var HELLO_REPLY_MIN = 200, HELLO_REPLY_SPREAD = 700;
   var SKEW_WARN = 60000;
+  /** 이보다 먼 미래의 타임스탬프는 신뢰하지 않음 (시계 오염/악의적 값 방지). 통상적인 폰 시계 오차(분~시간)는 허용 */
+  var MAX_FUTURE = 24 * 3600 * 1000;
 
   function cryptoObj() {
     if (typeof globalThis !== 'undefined' && globalThis.crypto) return globalThis.crypto;
@@ -77,7 +79,7 @@
     var last = 0;
     return {
       now: function () { var t = nowFn(); if (t <= last) t = last + 1; last = t; return t; },
-      observe: function (ts) { if (typeof ts === 'number' && isFinite(ts) && ts > last) last = ts; },
+      observe: function (ts) { if (typeof ts === 'number' && isFinite(ts) && ts > last && ts <= nowFn() + MAX_FUTURE) last = ts; },
       peek: function () { return last; }
     };
   }
@@ -92,7 +94,9 @@
   function isInt(v) { return typeof v === 'number' && isFinite(v) && Math.floor(v) === v; }
   function clampInt(v, lo, hi) { v = Math.round(Number(v)); if (!isFinite(v)) return null; return Math.min(hi, Math.max(lo, v)); }
   function cleanStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max); }
-  function cleanPid(v) { return String(v == null ? '' : v).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24); }
+  var RESERVED_PID = /^(__proto__|constructor|prototype|hasOwnProperty|toString|valueOf)$/;
+  function cleanPid(v) { var s = String(v == null ? '' : v).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24); return RESERVED_PID.test(s) ? '' : s; }
+  function isReservedPid(id) { return RESERVED_PID.test(String(id)); }
   function playerOf(round, pid) {
     for (var i = 0; i < round.players.length; i++) if (round.players[i].id === pid) return round.players[i];
     return null;
@@ -110,6 +114,7 @@
   // ───────────────────────── 키 투영 ─────────────────────────
   function ensureScores(round) {
     round.scores = round.scores || {};
+    if (Array.isArray(round.players)) round.players = round.players.filter(function (p) { return p && !isReservedPid(p.id); });
     (round.players || []).forEach(function (p) {
       if (!Array.isArray(round.scores[p.id]) || round.scores[p.id].length !== round.holes) {
         var old = round.scores[p.id] || [];
@@ -245,7 +250,12 @@
     var cur = project(round), changed = [];
     Object.keys(cur).forEach(function (k) { if (!baseline || baseline[k] !== cur[k]) changed.push(k); });
     if (baseline) Object.keys(baseline).forEach(function (k) { if (!(k in cur)) changed.push(k); });
-    if (changed.length) stamp(round, changed, clock, by);
+    if (changed.length) {
+      // 로컬 값도 원격 수신(setKey)과 같은 규칙으로 정규화 → 복제본이 같은 rev 아래 같은 값을 갖도록
+      changed.forEach(function (k) { if (k !== 'meta') { var v = getKey(round, k); if (v !== undefined) setKey(round, k, v); } });
+      cur = project(round);
+      stamp(round, changed, clock, by);
+    }
     return { changed: changed, projection: cur };
   }
 
@@ -278,7 +288,8 @@
   function merge(round, keys, opts) {
     opts = opts || {};
     round.rev = round.rev || {};
-    var changed = [], localNewer = false, maxTs = 0;
+    var changed = [], localNewer = false, maxTs = 0, dropped = 0;
+    var limit = (opts.now || Date.now)() + MAX_FUTURE;
     Object.keys(keys || {}).forEach(function (k) {
       var inc = keys[k];
       if (!inc || typeof inc !== 'object' || !KEY_RE.test(k)) return;
@@ -286,6 +297,7 @@
       if (k === 'meta') return;
       var loc = round.rev[k] || { ts: 0, by: '' };
       var incRev = { ts: typeof inc.ts === 'number' && isFinite(inc.ts) ? inc.ts : 0, by: cleanStr(inc.by, 32) };
+      if (incRev.ts > limit) { dropped++; return; } // 터무니없는 미래 시각: 적용/저장하지 않음
       if (opts.force || newer(incRev, loc)) {
         if (setKey(round, k, inc.v)) {
           round.rev[k] = incRev;
@@ -295,7 +307,7 @@
         localNewer = true;
       }
     });
-    return { changed: changed, localNewer: localNewer, maxTs: maxTs };
+    return { changed: changed, localNewer: localNewer, maxTs: maxTs, dropped: dropped };
   }
 
   /** 스냅샷에 없는, 로컬에서 변경된 키가 있는지 */
@@ -369,13 +381,16 @@
     });
   }
   function open(key, str) {
-    str = String(str || '');
-    if (str.indexOf('E2.') !== 0 || !key) return Promise.reject(new Error('unknown payload format'));
-    var parts = str.split('.');
-    if (parts.length !== 3) return Promise.reject(new Error('bad payload'));
-    return subtle().decrypt({ name: 'AES-GCM', iv: fromB64(parts[1]) }, key, fromB64(parts[2])).then(function (pt) {
-      return JSON.parse(unutf8(new Uint8Array(pt)));
-    });
+    // 모든 실패(잘못된 base64 포함)를 reject로 통일 — 동기 예외가 mqtt 수신 스트림을 멈추지 않도록
+    return Promise.resolve().then(function () {
+      str = String(str || '');
+      if (str.indexOf('E2.') !== 0 || !key) throw new Error('unknown payload format');
+      var parts = str.split('.');
+      if (parts.length !== 3) throw new Error('bad payload');
+      var iv = fromB64(parts[1]), ct = fromB64(parts[2]);
+      if (iv.length !== 12) throw new Error('bad iv');
+      return subtle().decrypt({ name: 'AES-GCM', iv: iv }, key, ct);
+    }).then(function (pt) { return JSON.parse(unutf8(new Uint8Array(pt))); });
   }
 
   function parseBrokerUrl(u) {
@@ -399,8 +414,9 @@
     var client = null, topic = null, cryptoKey = null, stopped = false, status = 'idle';
     var pending = {}, dirty = false, opTimer = null, snapTimer = null, presenceTimer = null, hydrateTimer = null, helloTimer = null;
     var peers = {}, displayName = opts.name || '';
-    var hydrated = false, gotRetained = false, ready = false, lastSyncAt = 0, reconnectPeriod = 2000;
+    var hydrated = false, gotRetained = false, seededEarly = false, ready = false, lastSyncAt = 0, reconnectPeriod = 2000;
     var seenHello = {};
+    function setReady() { if (!ready) { ready = true; if (opts.onReady) opts.onReady(); } }
 
     function setStatus(s, detail) { status = s; if (opts.onStatus) opts.onStatus(s, detail); }
     function peerList() {
@@ -440,8 +456,9 @@
       if (!round || !isConnected()) return Promise.resolve(false);
       var msg = { t: 'snap', rid: round.id, from: clientId, keys: exportKeys(round) };
       if (extra) Object.keys(extra).forEach(function (k) { msg[k] = extra[k]; });
+      var early = !gotRetained; // 브로커의 retained 스냅샷을 보기 전에 올리는 것인지
       return publish('/s', msg, { qos: 1, retain: true }).then(function (ok) {
-        if (ok) { dirty = false; lastSyncAt = Date.now(); if (!ready) { ready = true; if (opts.onReady) opts.onReady(); } }
+        if (ok) { if (early) seededEarly = true; dirty = false; lastSyncAt = Date.now(); setReady(); }
         return ok;
       });
     }
@@ -494,6 +511,10 @@
     }
 
     function onMessage(t, payload, packet) {
+      // 수신 핸들러의 예외가 mqtt.js 패킷 처리 스트림을 멈추지 않도록 격리
+      try { handleMessage(t, payload, packet); } catch (e) { if (opts.onError) opts.onError(e); }
+    }
+    function handleMessage(t, payload, packet) {
       if (!topic || t.indexOf(topic) !== 0) return;
       var suffix = t.slice(topic.length);
       var text = typeof payload === 'string' ? payload : (payload && payload.length ? unutf8(payload) : '');
@@ -532,15 +553,20 @@
       open(cryptoKey, text).then(function (msg) {
         if (!msg || !msg.keys || typeof msg.keys !== 'object') return;
         if (msg.re) seenHello[cleanStr(msg.re, 12)] = 1;
-        if (msg.from === clientId) return;
-        var maxTs = 0;
-        Object.keys(msg.keys).forEach(function (k) { var e = msg.keys[k]; if (e && typeof e.ts === 'number' && isFinite(e.ts)) { clock.observe(e.ts); if (e.ts > maxTs) maxTs = e.ts; } });
-        if (maxTs - Date.now() > SKEW_WARN && opts.onSkew) opts.onSkew(maxTs - Date.now());
         var round = currentRound();
+        if (msg.from === clientId && round) {
+          // 내 메시지의 에코: 라운드가 있으면 무시 (내 retained 스냅샷이 서버에 있다는 사실만 기록)
+          if (msg.t === 'snap' && retained) { gotRetained = true; setReady(); }
+          return;
+        }
+        // 라운드가 없으면(삭제 후 재참여 등) 내 예전 스냅샷도 다른 기기의 것과 똑같이 채택
+        var maxTs = 0, limit = Date.now() + MAX_FUTURE;
+        Object.keys(msg.keys).forEach(function (k) { var e = msg.keys[k]; if (e && typeof e.ts === 'number' && isFinite(e.ts)) { if (e.ts <= limit) clock.observe(e.ts); if (e.ts > maxTs) maxTs = e.ts; } });
+        if (maxTs - Date.now() > SKEW_WARN && opts.onSkew) opts.onSkew(maxTs - Date.now());
         var meta = msg.keys.meta && msg.keys.meta.v;
         var rid = msg.rid || (meta && meta.id);
         if (!round) {
-          if (msg.t === 'snap' && meta) { if (retained) gotRetained = true; hydrated = true; if (opts.onSnapshot) opts.onSnapshot(msg.keys); }
+          if (msg.t === 'snap' && meta) { if (retained) gotRetained = true; hydrated = true; if (opts.onSnapshot) opts.onSnapshot(msg.keys); if (retained) setReady(); }
           return;
         }
         if (rid && round.id && rid !== round.id) { if (opts.onConflict) opts.onConflict(meta || { id: rid }); return; }
@@ -548,7 +574,14 @@
         var res = merge(round, msg.keys);
         lastSyncAt = Date.now();
         if (msg.t === 'snap') {
-          if (retained) { gotRetained = true; if (!hydrated) { clearTimeout(hydrateTimer); hydrated = true; } }
+          if (retained) {
+            gotRetained = true;
+            if (!hydrated) { clearTimeout(hydrateTimer); hydrated = true; }
+            // 이 retained 스냅샷이 오기 전에 내 (병합 전) 스냅샷을 먼저 올렸다면 서버에 옛 상태가 남은 것 → 병합본 재발행
+            else if (seededEarly && res.changed.length) scheduleSnapshot(500 + Math.floor(Math.random() * 1000));
+            seededEarly = false;
+            setReady();
+          }
           // 내 쪽이 더 새롭거나 스냅샷에 없는 키가 있으면 병합본을 다시 올림 (지터로 폭주 방지)
           if (res.localNewer || hasKeysMissingFrom(round, msg.keys)) scheduleSnapshot(1000 + Math.floor(Math.random() * 2000));
           if (hydrated && Object.keys(pending).length) flushOps();
@@ -571,46 +604,69 @@
           protocol: broker.protocol, host: broker.host, port: broker.port, path: broker.path,
           will: { topic: topic + '/p/' + clientId, payload: '', qos: 0, retain: true }
         };
-        client = mqtt.connect(connOpts);
-        client.on('connect', function () {
-          reconnectPeriod = 2000; client.options.reconnectPeriod = reconnectPeriod;
-          hydrated = false; gotRetained = false;
+        var c = client = mqtt.connect(connOpts);
+        // wake()로 클라이언트를 교체한 뒤 옛 클라이언트의 늦은 이벤트가 세션 상태를 건드리지 않도록 동일성 검사
+        c.on('connect', function () {
+          if (c !== client) return;
+          reconnectPeriod = 2000; c.options.reconnectPeriod = reconnectPeriod;
+          hydrated = false; gotRetained = false; seededEarly = false;
           setStatus('connected', broker.host);
-          client.subscribe(topic + '/#', { qos: 1 }, function (err) {
-            if (err) { if (opts.onError) opts.onError(err); return; }
-            if (!currentRound()) sendHello(); // 참여자: 스냅샷 요청
+          c.subscribe(topic + '/#', { qos: 1 }, function (err) {
+            if (c !== client) return;
+            if (err) { if (opts.onError) opts.onError(err); }
+            else if (!currentRound()) sendHello(); // 참여자: 스냅샷 요청
+            // SUBACK 이후부터 유예 시간을 재서 retained 스냅샷이 도착할 시간을 충분히 줌
+            clearTimeout(hydrateTimer);
+            hydrateTimer = setTimeout(function () { if (!hydrated) onHydrated(); else if (currentRound() && (dirty || !gotRetained)) publishSnapshot(); }, HYDRATE_GRACE);
           });
           publishPresence();
           clearInterval(presenceTimer);
           presenceTimer = setInterval(publishPresence, PRESENCE_INTERVAL);
-          clearTimeout(hydrateTimer);
-          hydrateTimer = setTimeout(function () { if (!hydrated) onHydrated(); else if (currentRound() && (dirty || !gotRetained)) publishSnapshot(); }, HYDRATE_GRACE);
         });
-        client.on('reconnect', function () { setStatus('connecting', broker.host); });
-        client.on('offline', function () { if (!stopped) setStatus('offline'); });
-        client.on('close', function () {
+        c.on('reconnect', function () { if (c === client) setStatus('connecting', broker.host); });
+        c.on('offline', function () { if (c === client && !stopped) setStatus('offline'); });
+        c.on('close', function () {
+          if (c !== client) return;
           clearInterval(presenceTimer); clearTimeout(hydrateTimer); hydrated = false;
           if (stopped) return;
           // 수동 백오프 (지터 포함, 최대 15초)
           reconnectPeriod = Math.min(15000, Math.round(reconnectPeriod * 1.6) + Math.floor(Math.random() * 700));
-          if (client) client.options.reconnectPeriod = reconnectPeriod;
+          c.options.reconnectPeriod = reconnectPeriod;
           setStatus('offline');
         });
-        client.on('error', function (e) { if (opts.onError) opts.onError(e); });
-        client.on('message', onMessage);
+        c.on('error', function (e) { if (c === client && opts.onError) opts.onError(e); });
+        c.on('message', function (t, p, pk) { if (c === client) onMessage(t, p, pk); });
       }).catch(function (e) { setStatus('error', e && e.message); if (opts.onError) opts.onError(e); });
     }
 
     /** 포그라운드 복귀/온라인 복귀 시: 죽은 소켓을 즉시 재연결 */
     function wake() {
       if (!client || stopped) return;
-      try { reconnectPeriod = 2000; client.options.reconnectPeriod = reconnectPeriod; client.reconnect(); setStatus('connecting', broker.host); } catch (e) { /* ignore */ }
+      reconnectPeriod = 2000;
+      if (client.connected || (client.disconnecting && !client.disconnected)) {
+        // 조용히 죽은 소켓은 connected=true로 남는다. 이때 mqtt.js의 reconnect()→end(false)는 PUBACK을 못 받은
+        // QoS1 발행이 있으면 'outgoingEmpty'를 영원히 기다려 재연결이 되지 않으므로 클라이언트 자체를 교체한다.
+        // (보내지 못한 변경은 dirty/pending에 남아 새 연결의 hydration 뒤 스냅샷으로 다시 전송됨)
+        forceClose(client); client = null;
+        clearInterval(presenceTimer); clearTimeout(hydrateTimer); hydrated = false; gotRetained = false;
+        start();
+        return;
+      }
+      try { client.options.reconnectPeriod = reconnectPeriod; client.reconnect(); setStatus('connecting', broker.host); } catch (e) { /* ignore */ }
+    }
+    /** 가능하면 정상 종료(DISCONNECT), 미확인 QoS1 발행 때문에 끝나지 않으면 잠시 후 강제 종료 */
+    function forceClose(c) {
+      var forced = false;
+      var t = setTimeout(function () { forced = true; try { c.end(true); } catch (e) { /* ignore */ } }, 1500);
+      try { c.end(false, {}, function () { if (!forced) clearTimeout(t); }); } catch (e2) { clearTimeout(t); try { c.end(true); } catch (e3) { /* ignore */ } }
     }
 
     /** 서버의 retained 스냅샷/내 presence 삭제 (호스트가 공유 종료 시) */
     function clearRetained() {
       if (!isConnected()) return Promise.resolve(false);
-      return rawPublish('/s', '', { qos: 1, retain: true }).then(function () { return rawPublish('/p/' + clientId, '', { qos: 0, retain: true }); });
+      return rawPublish('/s', '', { qos: 1, retain: true }).then(function (ok1) {
+        return rawPublish('/p/' + clientId, '', { qos: 0, retain: true }).then(function (ok2) { return ok1 && ok2; });
+      });
     }
 
     function stop() {
@@ -619,7 +675,7 @@
       if (client) {
         var c = client; client = null;
         try { if (c.connected) c.publish(topic + '/p/' + clientId, '', { qos: 0, retain: true }); } catch (e) { /* ignore */ }
-        try { c.end(false); } catch (e2) { /* ignore */ }
+        forceClose(c);
       }
       setStatus('idle');
     }
@@ -643,10 +699,10 @@
   }
 
   return {
-    ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, TEAMS: TEAMS,
+    ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,
-    createClock: createClock, maxRevTs: maxRevTs,
+    createClock: createClock, maxRevTs: maxRevTs, cleanPid: cleanPid, isReservedPid: isReservedPid,
     getKey: getKey, setKey: setKey, allKeys: allKeys, exportKeys: exportKeys, project: project, diffAndStamp: diffAndStamp,
     stampAll: stampAll, stamp: stamp, merge: merge, hasKeysMissingFrom: hasKeysMissingFrom, roundFromSnapshot: roundFromSnapshot, ensureScores: ensureScores,
     deriveRoom: deriveRoom, seal: seal, open: open, parseBrokerUrl: parseBrokerUrl,

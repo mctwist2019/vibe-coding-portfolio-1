@@ -1,5 +1,5 @@
 /* 오프라인 지원: 네트워크 우선, 실패 시 캐시 */
-var CACHE = 'golf-score-v3';
+var CACHE = 'golf-score-v4';
 var ASSETS = ['./', './index.html', './styles.css', './games.js', './sync.js', './app.js', './vendor/mqtt.min.js', './icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', function (e) {

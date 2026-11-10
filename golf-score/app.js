@@ -158,7 +158,8 @@
       if (token !== sessionSeq) return; // 그 사이 다른 세션으로 교체됨
       session = S.createSession({
         mqtt: mqttLib, code: code, broker: brokerUrl, clientId: state.clientId, tabId: TAB_ID, name: myName(), clock: clock,
-        getRound: function () { return findRoundByCode(code); },
+        // 참여 중(스냅샷을 기다리는 동안)에는 기록에 남은 옛 사본을 세션에 노출하지 않음 → hello 요청/스냅샷 채택 경로가 정상 동작
+        getRound: function () { return state.joining && state.joining.code === code ? null : findRoundByCode(code); },
         onApply: function (changed) { onRemoteApply(code, changed); },
         onSnapshot: handlers && handlers.onSnapshot,
         onStatus: function (s, detail) { onSessionStatus(code, s, detail); },
@@ -179,19 +180,20 @@
     sessionSeq++;
     clearTimeout(graceTimer);
     if (session) { try { session.stop(); } catch (e) { /* ignore */ } session = null; }
-    syncStatus = 'idle'; syncReady = false; peers = [];
+    syncStatus = 'idle'; syncReady = false; peers = []; skewMs = 0;
   }
   function onSessionStatus(code, s) {
     syncStatus = s;
-    if (s === 'connected') fgAt = 0;
+    if (s === 'connected') { fgAt = 0; skewMs = 0; }
     if (scan && scan.code === code) {
       if (s === 'connected') {
         clearTimeout(scan.timer);
         if (scan.mode === 'host') {
           var r = state.round; if (r && r.share) r.share.broker = scan.idx;
-          scan = null; save();
+          clearScan(); save();
         } else {
-          scan.timer = setTimeout(function () { nextBroker('nosnapshot'); }, 7000);
+          var sc = scan;
+          sc.timer = setTimeout(function () { if (scan === sc) nextBroker('nosnapshot'); }, 7000);
         }
       } else if (s === 'error') { nextBroker('noconnect'); }
     }
@@ -220,7 +222,9 @@
   }
 
   // 브로커 스캔: 순서대로 연결을 시도하고 성공한 브로커를 방에 고정
+  function clearScan() { if (scan) clearTimeout(scan.timer); scan = null; }
   function beginScan(code, mode, startIdx, handlers) {
+    clearScan();
     var list = brokerList();
     scan = { code: code, mode: mode, idx: Math.min(Math.max(0, startIdx || 0), list.length - 1), list: list, tried: 0, handlers: handlers || null };
     tryBroker();
@@ -230,7 +234,7 @@
     var s = scan;
     openSession(s.code, s.list[s.idx], s.handlers);
     clearTimeout(s.timer);
-    s.timer = setTimeout(function () { nextBroker('noconnect'); }, 9000);
+    s.timer = setTimeout(function () { if (scan === s) nextBroker('noconnect'); }, 9000);
     softRender();
   }
   function nextBroker(reason) {
@@ -242,7 +246,7 @@
     tryBroker();
   }
   function scanFailed(reason) {
-    var s = scan; scan = null; closeSession();
+    var s = scan; clearScan(); closeSession();
     if (s && s.mode === 'join') { if (state.joining) state.joining.status = reason === 'nosnapshot' ? 'timeout' : reason === 'nolib' || reason === 'nocrypto' ? reason : 'noconnect'; }
     else syncStatus = reason === 'nolib' || reason === 'nocrypto' ? reason : 'failed';
     render();
@@ -265,17 +269,18 @@
   }
   function stopSharing() {
     var r = state.round;
-    scan = null; closeSession();
+    clearScan(); closeSession();
     if (r && r.share) r.share.active = false;
     save(); render();
   }
   function endSharingOnServer() {
     var r = state.round; if (!r || !session) { stopSharing(); return; }
+    if (!session.connected()) { toast('연결된 상태에서만 서버의 데이터를 삭제할 수 있어요. 연결 후 다시 시도해 주세요.'); return; }
     r.status = 'closed'; save();
     var s = session;
-    s.flush().then(function () { return s.clearRetained(); }).then(function () {
-      r.status = 'live'; stopSharing(); toast('서버의 공유 데이터를 삭제했어요');
-    }, function () { r.status = 'live'; stopSharing(); });
+    var fail = function () { r.status = 'live'; save(); softRender(); toast('서버 삭제에 실패했어요. 연결 상태를 확인하고 다시 시도해 주세요.'); };
+    s.flush().then(function (ok) { if (!ok) throw new Error('offline'); return s.clearRetained(); })
+      .then(function (ok) { if (!ok) throw new Error('offline'); r.status = 'live'; stopSharing(); toast('서버의 공유 데이터를 삭제했어요'); }, fail);
   }
   function joinRoom(code, b) {
     code = S.normalizeCode(code);
@@ -284,13 +289,25 @@
     var cur = state.round;
     if (cur && cur.share && cur.share.code === code) { cur.share.active = true; save(); ensureSession(); go('play'); return; }
     if (cur) {
-      if (holesDone(cur) === 0 && !sharingActive()) { closeSession(); state.round = null; resetBaseline(); }
+      if (holesDone(cur) === 0 && !sharingActive()) { clearScan(); closeSession(); state.round = null; resetBaseline(); }
       else {
         if (!confirm('진행 중인 라운드(' + (cur.name || '라운드') + ', ' + holesDone(cur) + '/' + cur.holes + '홀)가 있어요.\n참여하면 이 라운드는 지난 라운드에 저장되고 공유 라운드로 바뀝니다.')) return;
-        closeSession(); archiveCurrent();
+        clearScan(); closeSession(); archiveCurrent();
       }
     }
-    state.readOnly = false; state.viewRoundId = null;
+    state.readOnly = false; state.viewRoundId = null; state.joining = null;
+    // 같은 코드의 라운드가 기록에 있으면(종료/보관 후 링크를 다시 누른 경우) 서버를 뒤지지 않고 그 라운드를 복원해 다시 연결
+    var hist = findRoundByCode(code);
+    if (hist) {
+      state.history = state.history.filter(function (h) { return h.id !== hist.id; });
+      hist.share = Object.assign({}, hist.share || {}, { code: code, active: true });
+      hist.currentHole = firstOpenHole(hist);
+      state.round = hist; resetBaseline(); save();
+      clearScan(); ensureSession();
+      if (hist.status === 'finished') { state.boardTab = 'settle'; go('board'); toast('이미 종료된 라운드예요. 늦은 수정이 있으면 반영돼요.'); }
+      else go('play');
+      return;
+    }
     state.joining = { code: code, status: 'connecting', b: Number(b) || 0 };
     beginScan(code, 'join', Number(b) || 0, { onSnapshot: function (keys) { adoptSnapshot(code, keys); } });
     go('joining');
@@ -301,12 +318,18 @@
     if (!r) return;
     fillGames(r.games);
     var idx = scan ? scan.idx : 0;
-    if (scan) { clearTimeout(scan.timer); scan = null; }
+    clearScan();
     r.share = { code: code, host: r.share && r.share.host, active: true, broker: idx };
     // 기록에 같은 라운드가 있으면 로컬 기록과 병합 (더 새로운 값 유지) 후 기록에서 제거
     var dup = null;
     state.history = state.history.filter(function (h) { if (h.id === r.id) { dup = h; return false; } return true; });
     if (dup) S.merge(r, S.exportKeys(dup));
+    if (r.status === 'closed') { // 호스트가 서버에서 삭제했지만 retained 스냅샷만 남은 경우
+      closeSession();
+      state.joining = { code: code, status: 'timeout', b: idx };
+      save(); render(); toast('호스트가 이미 종료한 공유예요.');
+      return;
+    }
     state.joining = null;
     if (r.status === 'finished') {
       r.finishedAt = r.finishedAt || Date.now(); r.share.active = false;
@@ -321,7 +344,7 @@
     if (session) session.setName(myName());
     save(); go('play');
   }
-  function cancelJoin() { scan = null; closeSession(); state.joining = null; go('home'); }
+  function cancelJoin() { clearScan(); closeSession(); state.joining = null; go('home'); }
 
   function statusLabel() {
     if (navigator.onLine === false) return '오프라인 — 입력은 저장되고 연결되면 자동으로 맞춰져요';
@@ -388,9 +411,12 @@
       return '<button data-action="go" data-view="' + it[0] + '" class="' + (active === it[0] ? 'active' : '') + '"><span class="ic">' + it[1] + '</span>' + it[2] + '</button>';
     }).join('') + '</div></nav>';
   }
-  function moneyChip(key, enabled) {
-    if (state.readOnly) return '<span class="chip sm ' + (enabled ? 'active' : '') + '">' + (enabled ? '₩ 정산 포함' : '정산 제외') + '</span>';
-    return '<button class="chip sm ' + (enabled ? 'active' : '') + '" data-action="toggle-money" data-key="' + key + '" title="이 게임의 금액을 정산에 포함">' + (enabled ? '₩ 정산 포함' : '정산 제외') + '</button>';
+  function moneyChip(key, enabled, blocked) {
+    // blocked: 켜져 있지만 조건(팀 구성 등)이 맞지 않아 정산에 실제로는 반영되지 않는 상태
+    var label = enabled ? (blocked ? '정산 포함 (조건 미충족)' : '₩ 정산 포함') : '정산 제외';
+    var cls = 'chip sm ' + (enabled && !blocked ? 'active' : '');
+    if (state.readOnly) return '<span class="' + cls + '">' + label + '</span>';
+    return '<button class="' + cls + '" data-action="toggle-money" data-key="' + key + '" title="이 게임의 금액을 정산에 포함">' + label + '</button>';
   }
   function teamHint(msg) {
     return '<div class="card"><div class="notice">' + esc(msg) + (state.readOnly ? '' : ' <button class="btn sm" data-action="go" data-view="settings" style="margin-left:6px">설정에서 팀 지정</button>') + '</div></div>';
@@ -490,7 +516,7 @@
       html += '<div class="notice">같은 코드로 들어온 사람은 누구나 점수를 입력할 수 있어요. 각자 자기 점수를 넣으면 모두의 화면에 바로 반영되고, 잠시 연결이 끊겨도 다시 붙으면 자동으로 합쳐집니다.<br><span class="small">공개 중계 서버를 거쳐 암호화되어 전송돼요. 플레이어 이름·점수·금액이 공유되니 실명이나 연락처는 쓰지 마세요.</span></div>';
       html += inAppBanner(code, r.share.broker || 0);
       html += '<div class="stack"><button class="btn block" data-action="stop-sharing">' + (isHost() ? '공유 중지 (내 기기만 끊기)' : '공유에서 나가기 (내 기기만)') + '</button>' +
-        (isHost() ? '<button class="btn block danger" data-action="end-sharing">공유 종료 (모두 끊고 서버에서 삭제)</button>' : '') + '</div>';
+        (isHost() ? '<button class="btn block danger" data-action="end-sharing" ' + (syncStatus === 'connected' ? '' : 'disabled title="연결된 상태에서만 가능"') + '>공유 종료 (모두 끊고 서버에서 삭제)</button>' : '') + '</div>';
     } else {
       html += '<div class="card"><h2>👥 동반자와 함께 입력</h2><p class="small muted" style="margin:0 0 10px">이 라운드를 공유하면 8자리 코드가 만들어져요. 동반자가 코드나 링크로 들어오면 모두가 같은 스코어를 보고 각자 입력할 수 있어요.</p>' +
         '<button class="btn primary block" data-action="start-sharing">공유 시작</button></div>';
@@ -605,7 +631,6 @@
     var g = d.games;
     if (g.skins.enabled && g.skins.mode === 'team' && nTeams < 2) errs.push('팀 스킨스 정산: 팀을 2개 이상 지정하세요.');
     if (g.match.enabled && g.match.mode === 'team' && nTeams !== 2) errs.push('팀 매치 정산: 정확히 2팀이 필요합니다.');
-    if (g.nassau.enabled && d.holes !== 18) errs.push('나소는 18홀에서만 가능합니다.');
     if (g.nassau.enabled && g.nassau.mode === 'team' && nTeams !== 2) errs.push('팀 나소 정산: 정확히 2팀이 필요합니다.');
     if (g.bestball.enabled && nTeams < 2) errs.push('베스트볼 정산: 팀을 2개 이상 지정하세요.');
     if (g.vegas.enabled && (nTeams !== 2 || Object.keys(teams).some(function (t) { return teams[t] !== 2; }))) errs.push('라스베가스 정산: 2명씩 2팀이 필요합니다.');
@@ -617,12 +642,12 @@
     var errs = validate(d, true);
     if (errs.length) { state.setupError = errs; save(); render(); return; }
     var players = d.players.filter(function (p) { return (p.name || '').trim(); }).map(function (p) {
-      return { id: p.id || uid(), name: p.name.trim().slice(0, 20), hcp: Math.max(0, Math.min(54, Number(p.hcp) || 0)), team: p.team || '' };
+      return { id: p.id || uid(), name: p.name.trim().slice(0, 20), hcp: Math.max(0, Math.min(54, Math.round(Number(p.hcp)) || 0)), team: p.team || '' };
     });
     var scores = {};
     players.forEach(function (p) { scores[p.id] = new Array(d.holes).fill(null); });
     var now = Date.now();
-    closeSession();
+    clearScan(); closeSession();
     state.round = {
       id: uid(), name: (d.name.trim() || ('라운드 ' + d.date)).slice(0, 60), date: d.date, holes: d.holes,
       pars: G.defaultPars(d.holes), strokeIndex: G.defaultStrokeIndex(d.holes),
@@ -742,15 +767,16 @@
     var tabs = [['stroke', '종합'], ['stableford', '스테이블포드'], ['skins', '스킨스'], ['match', '매치']];
     if (all.nassau) tabs.push(['nassau', '나소']);
     tabs.push(['bestball', '베스트볼']);
-    if (r.players.length === 4) tabs.push(['vegas', '라스베가스']);
+    if (r.players.length >= 4 || !all.vegas.error || all.vegas.enabled) tabs.push(['vegas', '라스베가스']);
     tabs.push(['bonus', '보너스'], ['settle', '💰 정산']);
     var tab = tabs.some(function (t) { return t[0] === state.boardTab; }) ? state.boardTab : 'stroke';
     var html = topbar(r.name, state.readOnly ? '기록' : holesDone(r) + '/' + r.holes + '홀', backBtn('home'), state.readOnly ? '' : statusPill('board') + '<button class="iconbtn" data-action="go" data-view="settings">⚙︎</button>');
     html += '<div class="screen">';
     html += finishedBanner(r);
     html += '<div class="tabs">' + tabs.map(function (t) {
-      var en = all[t[0]] && all[t[0]].enabled;
-      var inc = t[0] === 'bonus' ? !!(en && (en.nearest || en.longest || en.birdie)) : t[0] === 'stroke' ? r.games.stroke.unit > 0 : !!en;
+      var g0 = all[t[0]], en = g0 && g0.enabled;
+      // ₩ 표시는 실제로 정산에 합산되는 게임에만 (켜져 있어도 조건 미충족으로 제외되면 표시하지 않음)
+      var inc = t[0] === 'bonus' ? !!(en && (en.nearest || en.longest || en.birdie)) : t[0] === 'stroke' ? r.games.stroke.unit > 0 : !!(en && !g0.error);
       return '<button data-action="tab" data-tab="' + t[0] + '" class="' + (tab === t[0] ? 'active' : '') + '">' + t[1] + (inc ? ' ₩' : '') + '</button>';
     }).join('') + '</div>';
     html += ({
@@ -799,7 +825,7 @@
 
   function tabSkins(r, all) {
     var res = all.skins;
-    var head = '<h2>스킨스 ' + moneyChip('skins', res.enabled) + '<span class="hint">' + (r.games.skins.mode === 'team' ? '팀' : '개인') + (res.unit ? ' · 스킨당 ' + won(res.unit) : '') + (res.net ? ' · 네트' : '') + '</span></h2>';
+    var head = '<h2>스킨스 ' + moneyChip('skins', res.enabled, !!res.error) + '<span class="hint">' + (r.games.skins.mode === 'team' ? '팀' : '개인') + (res.unit ? ' · 스킨당 ' + won(res.unit) : '') + (res.net ? ' · 네트' : '') + '</span></h2>';
     if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 팀을 지정하세요.');
     var html = '<div class="card">' + head + '<table><thead><tr><th class="l">' + (r.games.skins.mode === 'team' ? '팀' : '플레이어') + '</th><th>스킨</th><th>금액</th></tr></thead><tbody>';
     var money = {};
@@ -826,7 +852,7 @@
 
   function tabMatch(r, all) {
     var res = all.match;
-    var head = '<h2>매치 플레이 ' + moneyChip('match', res.enabled) + '<span class="hint">' + (r.games.match.mode === 'team' ? '팀' : '개인 리그') + (res.unit ? ' · 홀당 ' + won(res.unit) : '') + (res.net ? ' · 네트' : '') + '</span></h2>';
+    var head = '<h2>매치 플레이 ' + moneyChip('match', res.enabled, !!res.error) + '<span class="hint">' + (r.games.match.mode === 'team' ? '팀' : '개인 리그') + (res.unit ? ' · 홀당 ' + won(res.unit) : '') + (res.net ? ' · 네트' : '') + '</span></h2>';
     if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 2팀을 지정하세요.');
     return '<div class="card">' + head + '<div class="stack">' +
       res.matches.map(function (m) { return matchBox(m, m.status, m.money && res.enabled ? won(m.money) : null); }).join('') +
@@ -835,7 +861,7 @@
 
   function tabNassau(r, all) {
     var res = all.nassau;
-    var head = '<h2>나소 ' + moneyChip('nassau', res.enabled) + '<span class="hint">' + (r.games.nassau.mode === 'team' ? '팀' : '개인') + (res.unit ? ' · 판당 ' + won(res.unit) : '') + '</span></h2>';
+    var head = '<h2>나소 ' + moneyChip('nassau', res.enabled, !!res.error) + '<span class="hint">' + (r.games.nassau.mode === 'team' ? '팀' : '개인') + (res.unit ? ' · 판당 ' + won(res.unit) : '') + '</span></h2>';
     if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '.');
     return '<div class="card">' + head + '</div>' + res.matches.map(function (m) {
       return '<div class="card"><h2>' + esc(m.a.name) + ' vs ' + esc(m.b.name) + '</h2><div class="stack">' +
@@ -845,7 +871,7 @@
 
   function tabBestball(r, all) {
     var res = all.bestball;
-    var head = '<h2>베스트볼 ' + moneyChip('bestball', res.enabled) + '<span class="hint">베스트 ' + res.count + (res.net ? ' · 네트' : '') + (res.unit ? ' · 홀당 ' + won(res.unit) : '') + '</span></h2>';
+    var head = '<h2>베스트볼 ' + moneyChip('bestball', res.enabled, !!res.error) + '<span class="hint">베스트 ' + res.count + (res.net ? ' · 네트' : '') + (res.unit ? ' · 홀당 ' + won(res.unit) : '') + '</span></h2>';
     if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '.');
     var html = '<div class="card">' + head + '<table><thead><tr><th class="l">팀</th><th>팀 타수</th><th>±파</th><th>홀 승</th></tr></thead><tbody>';
     res.teams.forEach(function (t) {
@@ -866,7 +892,7 @@
 
   function tabVegas(r, all) {
     var res = all.vegas;
-    var head = '<h2>라스베가스 ' + moneyChip('vegas', res.enabled) + '<span class="hint">' + (res.unit ? '점당 ' + won(res.unit) : '') + '</span></h2>';
+    var head = '<h2>라스베가스 ' + moneyChip('vegas', res.enabled, !!res.error) + '<span class="hint">' + (res.unit ? '점당 ' + won(res.unit) : '') + '</span></h2>';
     if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '.');
     var html = '<div class="card">' + head + '<div class="row" style="justify-content:space-around;text-align:center">' +
       res.teams.map(function (t, i) {
@@ -1025,12 +1051,13 @@
     var finished = false;
     var done = function () {
       if (finished) return; finished = true;
+      if (state.round !== r) return; // 전송 대기 중 삭제/새 라운드/참여로 이미 다른 상태가 됨 → 건드리지 않음
       var wasShared = sharingActive();
-      archiveCurrent();
+      clearScan(); archiveCurrent();
       // 공유 중이던 라운드는 잠시 연결을 유지해 늦게 들어오는 수정(마지막 홀 등)을 기록에 반영
       if (wasShared && session) { clearTimeout(graceTimer); graceTimer = setTimeout(function () { closeSession(); }, 90000); }
       else closeSession();
-      state.readOnly = true; state.viewRoundId = state.history[0].id; state.boardTab = 'settle';
+      state.readOnly = true; state.viewRoundId = r.id; state.boardTab = 'settle';
       go('board');
     };
     if (session && sharingActive()) {
@@ -1063,13 +1090,14 @@
     },
     'new-round': function () {
       if (state.round && !confirm('진행 중인 라운드가 있어요. 새 라운드를 시작하면 현재 라운드는 기록으로 저장됩니다. 계속할까요?')) return;
-      if (state.round) { closeSession(); archiveCurrent(); }
+      if (state.round) { clearScan(); closeSession(); archiveCurrent(); }
       var prev = state.history[0];
       state.draft = newDraft();
       if (prev) { // 지난 라운드 플레이어/게임 설정 재사용
         state.draft.players = prev.players.map(function (p) { return { id: uid(), name: p.name, hcp: p.hcp, team: p.team }; });
         state.draft.games = fillGames(clone(prev.games || {}));
         state.draft.holes = prev.holes;
+        if (state.draft.holes !== 18) state.draft.games.nassau.enabled = false; // 나소는 18홀 전용
       }
       state.setupError = null;
       go('setup');
@@ -1087,6 +1115,7 @@
       var v = d.type === 'number' ? Number(d.value) : d.value;
       if (d.path === 'boardNet') v = d.value === 'true';
       setPath(state, d.path, v);
+      if (d.path === 'draft.holes' && v !== 18 && state.draft && state.draft.games && state.draft.games.nassau) state.draft.games.nassau.enabled = false; // 나소 카드가 숨겨지므로 플래그도 해제
       save(); render();
     },
     'toggle-money': function (d) {
@@ -1134,8 +1163,8 @@
       save(); render();
     },
     finish: finishRound,
-    'archive-now': function () { var wasShared = sharingActive(); archiveCurrent(); if (wasShared && session) { clearTimeout(graceTimer); graceTimer = setTimeout(closeSession, 90000); } else closeSession(); state.readOnly = true; state.viewRoundId = state.history[0].id; state.boardTab = 'settle'; go('board'); },
-    discard: function () { if (confirm('진행 중인 라운드를 삭제할까요? 복구할 수 없어요.' + (sharingActive() ? '\n(다른 참가자의 기기에는 남아 있어요)' : ''))) { scan = null; closeSession(); state.round = null; resetBaseline(); go('home'); } },
+    'archive-now': function () { var r = state.round; if (!r) return; var wasShared = sharingActive(); clearScan(); archiveCurrent(); if (wasShared && session) { clearTimeout(graceTimer); graceTimer = setTimeout(closeSession, 90000); } else closeSession(); state.readOnly = true; state.viewRoundId = r.id; state.boardTab = 'settle'; go('board'); },
+    discard: function () { if (confirm('진행 중인 라운드를 삭제할까요? 복구할 수 없어요.' + (sharingActive() ? '\n(다른 참가자의 기기에는 남아 있어요)' : ''))) { clearScan(); closeSession(); state.round = null; resetBaseline(); go('home'); } },
     'view-history': function (d) { state.readOnly = true; state.viewRoundId = d.id; state.boardTab = 'stroke'; go('board'); },
     'del-history': function (d) { if (confirm('이 기록을 삭제할까요?')) { state.history = state.history.filter(function (h) { return h.id !== d.id; }); save(); render(); } },
     'share-text': shareResults,
@@ -1143,7 +1172,7 @@
     // 실시간 공유
     'start-sharing': startSharing,
     'retry-sharing': retrySharing,
-    'reshare-new-code': function () { if (confirm('새 코드를 만들어 다시 공유할까요? 이미 들어온 참가자는 새 코드로 다시 참여해야 해요.')) { scan = null; closeSession(); startSharing(); } },
+    'reshare-new-code': function () { if (confirm('새 코드를 만들어 다시 공유할까요? 이미 들어온 참가자는 새 코드로 다시 참여해야 해요.')) { clearScan(); closeSession(); startSharing(); } },
     'stop-sharing': function () {
       if (!confirm(isHost() ? '내 기기의 연결만 끊어요. 다른 참가자는 계속 함께 입력할 수 있어요. 중지할까요?' : '공유에서 나갈까요? 지금까지의 점수는 내 기기에 남아요.')) return;
       stopSharing();
@@ -1184,9 +1213,11 @@
     if (el.dataset.type === 'bool') v = el.checked;
     else if (el.dataset.type === 'number') { v = el.value === '' ? 0 : Number(el.value); if (isNaN(v)) v = 0; }
     else v = el.value;
-    if (path.indexOf('.pars.') > 0) v = Math.min(6, Math.max(3, v || 4));
-    if (path.indexOf('.strokeIndex.') > 0) { var r = state.round; v = Math.min(r.holes, Math.max(1, v || 1)); }
-    if (/\.hcp$/.test(path)) v = Math.min(54, Math.max(0, v));
+    // 공유 수신 측(sync.js setKey)과 같은 규칙으로 정수화·범위 제한 → 기기마다 다른 값이 남지 않도록
+    if (path.indexOf('.pars.') > 0) v = Math.min(6, Math.max(3, Math.round(v) || 4));
+    if (path.indexOf('.strokeIndex.') > 0) { var r = state.round; v = Math.min(r.holes, Math.max(1, Math.round(v) || 1)); }
+    if (/\.hcp$/.test(path)) v = Math.min(54, Math.max(0, Math.round(v) || 0));
+    if (/\.unit$/.test(path)) v = Math.min(100000000, Math.max(0, Math.round(v) || 0));
     if (getPath(state, path) === v) return;
     setPath(state, path, v);
     save();
@@ -1240,6 +1271,11 @@
   if (state.view === 'joining' || state.view === 'share') state.view = state.round ? 'play' : 'home';
   save();
   render();
-  if (pendingJoin) setTimeout(function () { joinRoom(pendingJoin.code, pendingJoin.b); }, 50);
+  if (pendingJoin) setTimeout(function () {
+    var seq = sessionSeq;
+    joinRoom(pendingJoin.code, pendingJoin.b);
+    // 참여가 시작되지 않았으면(잘못된 코드, 취소 등) 진행 중이던 내 공유를 다시 연결
+    if (!state.joining && !scan && sessionSeq === seq) ensureSession();
+  }, 50);
   else ensureSession();
 })();

@@ -162,3 +162,72 @@ test('messages for a different round id are rejected (conflict)', { skip, timeou
     await wait(300);
   }
 });
+
+test('a device re-joining with no local round adopts its OWN retained snapshot; adopters become ready without editing', { skip, timeout: 30000 }, async () => {
+  const code = S.randomCode();
+  const sessions = [];
+  try {
+    // 1) 기기 A가 호스트로 스냅샷을 올린 뒤 라운드를 삭제하고 세션을 끊음 (retained 스냅샷은 A가 작성자)
+    const A = { code, round: hostRound(code) };
+    A.round.scores.p1[0] = 3; S.stamp(A.round, ['score:p1:0'], S.createClock(), 'devA');
+    const a1 = mkSession(sessions, 'devA', A);
+    await a1.start();
+    await until(() => A.ready === true, 8000, 'A ready');
+    a1.stop();
+    await wait(400);
+
+    // 2) 같은 clientId로, 라운드 없이 다시 참여 → 다른 기기가 아무도 없어도 retained 스냅샷을 채택해야 함
+    const A2 = { code, round: null };
+    const a2 = mkSession(sessions, 'devA', A2, { onSnapshot: (keys) => { A2.round = S.roundFromSnapshot(keys, defaults); } });
+    await a2.start();
+    await until(() => A2.round !== null, 8000, 'own retained snapshot adopted');
+    assert.equal(A2.round.scores.p1[0], 3);
+    await until(() => A2.ready === true, 3000, 'adopter is ready without publishing');
+    assert.ok(!(A2.errors || []).length, 'no errors: ' + JSON.stringify(A2.errors));
+
+    // 3) 라운드를 들고 재접속하는 기기도 (다른 기기의 retained 스냅샷이 있으면) 편집 없이 ready
+    const B = { code, round: S.roundFromSnapshot(S.exportKeys(A2.round), defaults) };
+    const b = mkSession(sessions, 'devB', B);
+    await b.start();
+    await until(() => B.ready === true, 6000, 'reconnecting holder becomes ready from the retained snapshot');
+  } finally {
+    sessions.forEach(s => s.stop());
+    await wait(300);
+  }
+});
+
+test('wake() on a connected client replaces it and sync keeps working; stop() closes cleanly', { skip, timeout: 30000 }, async () => {
+  const code = S.randomCode();
+  const sessions = [];
+  try {
+    const H = { code, round: hostRound(code) };
+    const host = mkSession(sessions, 'host', H);
+    await host.start();
+    await until(() => H.ready === true, 8000, 'host ready');
+    const Gr = { code, round: null };
+    const guest = mkSession(sessions, 'guest', Gr, { onSnapshot: (keys) => { Gr.round = S.roundFromSnapshot(keys, defaults); } });
+    await guest.start();
+    await until(() => Gr.round !== null, 8000, 'guest adopted');
+
+    // 포그라운드 복귀를 흉내: 연결된 상태에서 wake() → 클라이언트 교체 후 재연결
+    H.round.scores.p1[1] = 5; host.touch(['score:p1:1']); // 미확인 QoS1 발행이 있는 상태에서 wake
+    host.wake();
+    await until(() => H.status === 'connecting', 2000, 'wake restarts the connection');
+    await until(() => H.status === 'connected' && host.hydrated(), 10000, 'host reconnected and hydrated');
+    await until(() => Gr.round.scores.p1[1] === 5, 8000, 'pending edit reached the guest after wake');
+
+    H.round.scores.p1[2] = 4; host.touch(['score:p1:2']);
+    await until(() => Gr.round.scores.p1[2] === 4, 5000, 'host → guest after wake');
+    Gr.round.scores.p2[2] = 6; guest.touch(['score:p2:2']);
+    await until(() => H.round.scores.p2[2] === 6, 5000, 'guest → host after wake');
+    await until(() => host.peers().length >= 1 && guest.peers().length >= 1, 8000, 'presence after wake');
+    assert.ok(!(H.errors || []).length, 'no errors: ' + JSON.stringify(H.errors));
+
+    // 정상 종료: 게스트가 호스트의 presence 해제를 봄 (DISCONNECT 또는 LWT)
+    host.stop();
+    await until(() => guest.peers().length === 0, 8000, 'host presence cleared after stop');
+  } finally {
+    sessions.forEach(s => s.stop());
+    await wait(300);
+  }
+});

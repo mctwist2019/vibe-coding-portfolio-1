@@ -181,3 +181,134 @@ test('built-in courses are structurally valid and pass sync validation unchanged
     assert.equal(r.course, c.name);
   });
 });
+
+// ───────────────────────── 코드 리뷰에서 확인된 문제의 회귀 테스트 ─────────────────────────
+test('hole tips: the personal line ignores what is being entered on that hole (score rows must not jump while tapping)', () => {
+  // 1번홀 더블보기 뒤 2번홀(파4) 입력 중
+  const r = mk(9, { a: [6], b: [4] }, { holeInfo: { 1: { dist: 336, haz: 1 } }, stats: { a: { 0: { ob: 1 } } } });
+  const before = A.holeTips(r, 1, 'a');
+  [4, 5, 6, 7, null].forEach((g) => {
+    [undefined, { ob: 1 }, { ob: 2, hz: 2, fw: 2 }].forEach((s) => {
+      r.scores.a[1] = g; if (s) r.stats.a[1] = s; else delete r.stats.a[1];
+      assert.deepEqual(A.holeTips(r, 1, 'a'), before, 'score ' + g + ', stats ' + JSON.stringify(s));
+    });
+  });
+  // 다른 홀의 기록은 그대로 반영된다
+  r.scores.a[1] = null; delete r.stats.a[1]; r.scores.a[4] = 6;
+  assert.match(A.holeTips(r, 1, 'a').join(' '), /오늘 파4에서 평균 \+2\.0/);
+  assert.deepEqual(A.holeTips(r, 1, 'nobody'), A.holeTips(r, 1), 'unknown player → no personal line');
+});
+
+test('hole tips: one aim per tee shot (dogleg vs outside hazards), green wording on par 3', () => {
+  const r = mk(9, { a: [] }); // 0번은 파4, 2번은 파3
+  const tee = (h, info) => { r.holeInfo = { [h]: info }; return A.holeTips(r, h); };
+  const aims = (tips) => {
+    const s = new Set();
+    tips.forEach((t) => {
+      if (/오른쪽 절반|오른쪽으로 보내면|오른쪽으로 겨냥|보다 오른쪽을 겨냥/.test(t)) s.add('R');
+      if (/왼쪽 절반|왼쪽으로 보내면|왼쪽으로 겨냥|보다 왼쪽을 겨냥/.test(t)) s.add('L');
+      if (/가운데로 보내|가운데를 겨냥/.test(t)) s.add('C');
+    });
+    return [...s].join('');
+  };
+  assert.deepEqual(tee(0, { shape: 'L', haz: 64 }), ['왼쪽으로 휘는 홀인데 바깥쪽(오른쪽)에 벙커가 있어요. 페어웨이 가운데를 겨냥하고, 벙커에 못 미치는 클럽으로 끊어 가는 것도 방법이에요.']);
+  assert.equal(aims(tee(0, { shape: 'R', haz: 32 })), 'C');
+  assert.deepEqual(tee(0, { shape: 'L', haz: 2 }), ['왼쪽으로 휘는 홀인데 바깥쪽(오른쪽)이 OB예요. 코너를 가로지르려 하지 말고 페어웨이 가운데를 겨냥하세요.']);
+  assert.equal(aims(tee(0, { shape: 'L', haz: 2 | 64 })), 'C');
+  assert.equal(aims(tee(0, { shape: 'L', haz: 1 })), 'R'); // 안쪽이 위험한 도그렉은 바깥쪽으로
+  assert.equal(aims(tee(0, { shape: 'L', haz: 32 })), 'R');
+  for (const shape of [undefined, 'S', 'L', 'R']) for (let haz = 0; haz < 128; haz++) {
+    if (haz & 16) continue;
+    assert.ok(aims(tee(0, { shape, haz })).length <= 1, 'par4 ' + shape + ' ' + haz);
+    const t3 = tee(2, { shape, haz: haz | 128 });
+    assert.ok(aims(t3).length <= 1, 'par3 ' + shape + ' ' + haz);
+    assert.doesNotMatch(t3.join(' '), /페어웨이|우드나 유틸리티|휘는 홀|끊어 가/, 'par3 ' + shape + ' ' + haz);
+  }
+  assert.match(tee(2, { haz: 3 })[0], /그린 양쪽이 모두 위험/);
+  assert.match(tee(2, { haz: 1 })[0], /왼쪽이 OB예요. 그린 가운데보다 오른쪽/);
+});
+
+test('coach: archived or fully entered rounds get no in-the-moment lines; a cheer always exists', () => {
+  const LIVE = /지금|방금|다음 티샷|다음 샷|다음 한 샷|다음 홀|남은 \d+홀|잊어요|좋은 페이스|끝까지/;
+  const r = mk(18, { a: [4, 5, 3, 5, 5, 4, 4, 5, 5], b: [5, 5, 4, 5, 5, 4, 4, 5, 5], c: [5, 6, 4, 6, 5, 5, 4, 5, 9] });
+  r.stats = { c: { 8: { ob: 1 } } };
+  assert.equal(A.roundStatus(r).finished, false, 'still live while it is the current round');
+  const st = A.roundStatus(r, { archived: true });
+  assert.equal(st.finished, true); assert.equal(st.thruAll, 9);
+  ['a', 'b', 'c'].forEach((id) => { const c = A.coach(r, id, st); assert.doesNotMatch(c.cheers.concat(c.tips).join(' '), LIVE, id); });
+  assert.match(A.coach(r, 'a', st).cheer, /오늘의 1위/);
+  const fin = mk(9, { a: [5, 5, 4, 6, 5, 6, 4, 5, 6], b: [4, 4, 3, 5, 4, 4, 3, 4, 5] }, { status: 'finished' });
+  assert.doesNotMatch(A.coach(fin, 'a').cheers.join(' '), LIVE);
+  // 나는 18홀을 다 넣었는데 동반자가 한 홀 남은 상태: 아직 최종이 아니므로 순위를 단정하지 않고, 실시간 문구도 쓰지 않는다
+  const full = [4, 5, 3, 5, 5, 4, 4, 5, 5, 4, 5, 3, 5, 5, 4, 4, 5, 5];
+  const ca = A.coach(mk(18, { a: full, b: full.map((v, i) => (i === 17 ? null : v + 1)) }), 'a');
+  assert.doesNotMatch(ca.cheers.join(' '), /지금 단독 선두|오늘의 1위/);
+  assert.match(ca.cheers.join(' '), /수고하셨어요/);
+  // 격려는 항상 한 줄 이상 (입력 화면이 c.cheer를 그대로 쓴다)
+  [[6], [5, 6], [4, 5, 4, 5, 4, 7], [5, 5, 5, 8], [4]].forEach((s) => {
+    const c = A.coach(mk(18, { a: s, b: [4] }), 'a');
+    assert.ok(c.cheer && c.lead && c.cheers.length >= 1, JSON.stringify(s));
+  });
+  assert.doesNotMatch(A.coach(mk(18, { a: [4, 5, 4, 5, 4, 7], b: [4] }), 'a').cheer, /좋은 페이스|스윙 리듬 괜찮아요/);
+});
+
+test('coach: rank talk compares only the holes everyone has entered, and stays quiet when entries are far apart', () => {
+  // a가 7번홀(파3)을 먼저 입력해 트리플: 둘 다 친 6홀에서는 a가 1타 앞서지만 파 대비 누적만 보면 b가 앞서 보인다
+  const r = mk(18, { a: [5, 5, 4, 5, 5, 5, 6], b: [5, 5, 4, 6, 5, 5] });
+  let st = A.roundStatus(r);
+  assert.equal(st.even, false);
+  assert.equal(st.players[0].id, 'b', 'the raw table still ranks by cumulative to-par');
+  assert.match(A.coach(r, 'a', st).cheers.join(' '), /지금 단독 선두/);
+  assert.match(A.coach(r, 'b', st).cheers.join(' '), /선두와 1타 차, 남은 12홀/);
+  r.scores.b[6] = 3; // b도 7번홀 입력(파) → 이제 b가 2타 앞선다
+  st = A.roundStatus(r);
+  assert.equal(st.even, true);
+  assert.match(A.coach(r, 'b', st).cheers.join(' '), /지금 단독 선두/);
+  assert.match(A.coach(r, 'a', st).cheers.join(' '), /선두와 2타 차, 남은 11홀/);
+  // 9홀만 입력된 사람이 '오늘의 1위'가 되지 않는다
+  const fin = mk(18, { a: new Array(18).fill(5), b: [6, 5, 4, 7, 5, 5, 5, 5, 6] }, { status: 'finished' });
+  assert.equal(A.roundStatus(fin).players[0].id, 'b');
+  ['a', 'b'].forEach((id) => assert.doesNotMatch(A.coach(fin, id).cheers.join(' '), /1위/, id));
+  // 진행 중에 한 사람이 9홀에서 멈춘 경우: 나머지 사람에게 순위를 말하지 않는다
+  const f15 = [5, 5, 4, 5, 5, 5, 4, 5, 6, 5, 5, 4, 6, 5, 5];
+  const stop = mk(18, { a: f15, b: f15.map((v, i) => (i === 3 ? v + 1 : v)), c: [4, 4, 3, 5, 4, 4, 3, 4, 5] });
+  ['a', 'b', 'c'].forEach((id) => { const c = A.coach(stop, id); assert.doesNotMatch(c.cheers.concat(c.tips).join(' '), /선두|1위/, id); });
+  // 스코어가 하나도 없는 사람은 비교에서 빠진다
+  const idle = mk(9, { a: [4, 4, 3], b: [5, 4, 3], c: [] });
+  assert.equal(A.roundStatus(idle).even, true);
+  assert.match(A.coach(idle, 'a').cheers.join(' '), /지금 단독 선두/);
+  // 여유가 없을 때는 '충분히 뒤집을 수 있어요'라고 하지 않는다
+  const tight = A.coach(mk(9, { a: [4, 4, 3, 5, 4, 4, 3, 4], b: [4, 4, 3, 5, 4, 4, 3, 5] }), 'b').cheers.join(' ');
+  assert.match(tight, /선두와 1타 차, 남은 1홀까지 포기하지 마세요/);
+  assert.doesNotMatch(tight, /충분히/);
+});
+
+test('coach: no 전·후반 trend line when the first nine has too few recorded holes', () => {
+  const a = new Array(8).fill(null).concat([5, 5, 5, 3]); // 9번 파, 10~12번 보기·보기·파
+  const c = A.coach(mk(18, { a }), 'a');
+  assert.ok(!c.tips.concat(c.cheers).some((t) => t.indexOf('후반 들어') >= 0));
+});
+
+test('playOrder: an explicitly chosen start (round.startBack) wins over the entry-time guess', () => {
+  const r = mk(18, { a: [4, 4, 3, 5, 4, 4, 3, 4, 4, 5, 5, 4, 8] }); // 9번홀 버디, 13번홀 +3
+  [9, 10, 11].forEach((h, i) => { r.rev['score:a:' + h] = { ts: 1000 + i, by: 'x' }; });
+  for (let h = 0; h < 9; h++) r.rev['score:a:' + h] = { ts: 2000 + h, by: 'x' };
+  r.rev['score:a:12'] = { ts: 3000, by: 'x' };
+  assert.equal(A.playOrder(r).startBack, true, 'the guess can only follow entry time');
+  r.startBack = false;
+  assert.equal(A.playOrder(r).startBack, false);
+  const s = A.playerStats(r, 'a');
+  assert.equal(s.seq[s.seq.length - 1].h, 12);
+  assert.deepEqual(s.nines.map((n) => n.label), ['전반 (1~9번)', '후반 (10~18번)']);
+  const c = A.coach(r, 'a');
+  assert.match(c.tips[0], /^13번홀은 잊어요/);
+  assert.ok(!c.cheers.some((t) => /9번홀 버디/.test(t)));
+  const n = mk(18, { a: [4, 4, 3, 5, 4, 4, 3, 4, 5, 4, 4] });
+  for (let h = 0; h < 11; h++) n.rev['score:a:' + h] = { ts: 1000 + h, by: 'x' };
+  n.startBack = true;
+  assert.deepEqual(A.playerStats(n, 'a').seq.map((e) => e.h), [9, 10, 0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  const nine = mk(9, { a: [4] }); nine.startBack = true;
+  assert.equal(A.playOrder(nine).startBack, false);
+  const junk = mk(18, { a: [4] }); junk.startBack = 'in';
+  assert.equal(A.playOrder(junk).startBack, false);
+});

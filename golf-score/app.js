@@ -137,11 +137,22 @@
     return loadMqtt.p;
   }
 
-  /** 입력 중이면 재렌더를 미뤄 포커스를 잃지 않게 함 */
+  /** 입력 중이면 전체 재렌더를 미뤄 포커스를 잃지 않게 한다. 그동안에도 입력란이 들어 있지 않은 영역(data-region)은 새 내용으로 바꿔서
+   *  점수·순위가 낡은 채로 보이지 않게 한다 (코스 메모를 적는 동안 동반자가 넣은 점수 등) */
   function softRender() {
     var a = document.activeElement;
-    if (a && $app.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) { renderPending = true; return; }
+    if (a && $app.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) { renderPending = true; patchRegions(a); return; }
     render();
+  }
+  function patchRegions(focused) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = viewHtml();
+    var fresh = tmp.querySelectorAll('[data-region]');
+    for (var i = 0; i < fresh.length; i++) {
+      var old = $app.querySelector('[data-region="' + fresh[i].getAttribute('data-region') + '"]');
+      if (old && !old.contains(focused) && old.innerHTML !== fresh[i].innerHTML) old.innerHTML = fresh[i].innerHTML;
+    }
+    centerHoleStrip();
   }
   $app.addEventListener('focusout', function () {
     if (!renderPending) return;
@@ -290,7 +301,7 @@
     if (!S.isValidCode(code)) { alert('코드는 영문/숫자 8자리예요. (예: ABCD-EFGH)'); return; }
     if (!S.cryptoAvailable()) { alert('이 환경에서는 실시간 공유를 사용할 수 없어요. HTTPS 주소로 열어 주세요.'); return; }
     var cur = state.round;
-    if (cur && cur.share && cur.share.code === code) { cur.share.active = true; save(); ensureSession(); go('play'); return; }
+    if (cur && cur.share && cur.share.code === code) { state.readOnly = false; state.viewRoundId = null; cur.share.active = true; save(); ensureSession(); go('play'); return; }
     if (cur) {
       if (holesDone(cur) === 0 && !sharingActive()) { clearScan(); closeSession(); state.round = null; resetBaseline(); }
       else {
@@ -469,27 +480,54 @@
     s += '<text x="60" y="185" class="cap">파' + par + (info.dist ? ' · ' + info.dist + 'm' : '') + '</text>';
     return '<svg class="holemap" viewBox="0 0 120 190" role="img" aria-label="홀 약도">' + s + '</svg>';
   }
-  /** 코스 정보 중 입력과 무관하게 다시 그려도 되는 부분(요약·메모·공략·약도). 입력 중에는 이 영역만 갱신한다 */
+  /**
+   * 홀 카드 맨 아래의 코스 요약(두 줄 고정): 첫 줄은 '352m · 좌 도그렉 · OB 우', 둘째 줄은 메모(없으면 첫 공략 팁).
+   * 내용이 길거나 없어도 높이가 같다 → 동반자가 코스 정보를 넣거나 팁이 바뀌어도 아래 점수 칸이 밀리지 않는다.
+   * 누르면 아래 코스 정보 카드(약도·공략 전체)로 이동한다.
+   */
+  function courseSumInner(r, h) {
+    var labels = A.holeLabels(r, h), memo = A.holeInfo(r, h).memo;
+    var line1 = labels.join(' · '), line2 = memo ? '📝 ' + memo : '';
+    if (!line2 && labels.length) { var tips = A.holeTips(r, h, myPid()); if (tips.length) line2 = '🧭 ' + tips[0]; }
+    var none = !line1 && !line2;
+    if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = '거리·위험 요소·메모를 넣으면 약도와 공략 팁이 나와요'; }
+    else if (!line1) line1 = r.course || (h + 1) + '번홀 메모';
+    return '<span class="ic">🗺️</span><span class="txt"><span class="l1' + (none ? ' none' : '') + '">' + esc(line1) + '</span><span class="l2">' + esc(line2) + '</span></span><span class="go">›</span>';
+  }
+  /** 코스 저장 · 네이버 지도 버튼 줄. 코스 이름을 입력하는 동안에도 따로 다시 그려 링크가 현재 이름을 따라가게 한다 */
+  function courseActions(r) {
+    var q = (r.course || '').trim();
+    return '<button class="btn sm" data-action="course-save">이 코스 저장</button>' +
+      (q ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="https://map.naver.com/p/search/' + encodeURIComponent(q + ' 골프') + '">네이버 지도에서 보기 ↗</a>' : '');
+  }
+  /** 코스 정보 중 입력란이 없는 부분(메모·공략·약도). 입력하는 동안이나 동반자가 고쳤을 때 이 영역만 다시 그린다 */
   function courseLive(r, h, par) {
-    var info = A.holeInfo(r, h), labels = A.holeLabels(r, h), open = !!state.courseOpen;
-    var html = '<button class="detail-head course-head" data-action="course-toggle" aria-expanded="' + (open ? 'true' : 'false') + '">' +
-      '<span class="caret">' + (open ? '▾' : '▸') + '</span><span class="ttl">🗺️ 코스 정보</span>' +
-      (labels.length ? '<span class="sumtxt">' + esc(labels.join(' · ')) + '</span>' : '<span class="sumtxt none">' + (r.course ? esc(r.course) : '거리 · 홀 형태 · 위험 요소 · 메모') + '</span>') + '</button>';
+    var info = A.holeInfo(r, h), open = !!state.courseOpen;
     var tips = A.holeTips(r, h, myPid());
     var notes = '';
     if (info.memo) notes += '<div class="coachline"><span class="ic">📝</span><span>' + esc(info.memo) + '</span></div>';
     notes += tips.map(function (t) { return '<div class="coachline"><span class="ic">🧭</span><span>' + esc(t) + '</span></div>'; }).join('');
-    if (open && (info.dist || info.shape || info.haz)) {
-      html += '<div class="course-view">' + holeMap(info, par) + '<div class="stack grow">' + (notes || '<div class="muted small">위험 요소나 거리를 입력하면 공략 팁이 여기에 나와요.</div>') +
+    // 펼친 동안에는 약도 영역을 항상 같은 높이로 그린다(공략 글은 약도 높이 안에서 스크롤) → 위험 요소를 누르거나 거리를 적어도
+    // 바로 아래 입력란이 밀리지 않는다. 접은 상태에서는 홀 형태나 위험 요소가 있을 때만 약도를 보여 주고 글은 전부 펼친다
+    if (open || info.shape || info.haz) {
+      return '<div class="course-view' + (open ? ' fixed' : '') + '">' + holeMap(info, par) + '<div class="stack grow">' + (notes || '<div class="muted small">위험 요소나 거리를 입력하면 공략 팁이 여기에 나와요.</div>') +
         '<div class="muted small">약도는 입력한 정보로 그린 그림이에요. 실제 지형과 다를 수 있어요.</div></div></div>';
-    } else if (notes) html += '<div class="stack course-notes">' + notes + '</div>';
-    return html;
+    }
+    return notes ? '<div class="stack course-notes">' + notes + '</div>' : '';
   }
+  /**
+   * 코스 정보 카드. 점수 칸 '아래'에 둔다: 이 카드는 내용에 따라 높이가 변하는데(공략 팁, 동반자가 실시간으로 넣는 정보, 약도),
+   * 점수 칸 위에 있으면 높이가 변할 때마다 ＋/− 버튼이 손가락 밑에서 밀려 다른 사람 점수를 누르게 된다.
+   * 펼쳤을 때는 미리보기(약도·공략)를 높이가 고정된 영역으로 입력란 바로 위에 둔다: 입력 결과가 바로 보이면서 입력란은 움직이지 않는다.
+   */
   function courseBlock(r, h, par) {
-    var info = A.holeInfo(r, h);
-    var html = '<div class="course"><div id="course-live">' + courseLive(r, h, par) + '</div>';
-    if (state.courseOpen) {
-      var q = (r.course || '').trim();
+    var info = A.holeInfo(r, h), open = !!state.courseOpen;
+    var html = '<div class="card course" id="course-card">' +
+      '<button class="detail-head course-head" data-action="course-toggle" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+      '<span class="caret">' + (open ? '▾' : '▸') + '</span><span class="ttl">🗺️ ' + (h + 1) + '번홀 코스 정보</span>' +
+      '<span class="sumtxt' + (r.course ? '' : ' none') + '" id="course-headsum">' + esc(r.course || '거리 · 형태 · 위험 요소 · 메모') + '</span></button>';
+    html += '<div id="course-live" data-region="course-live">' + courseLive(r, h, par) + '</div>';
+    if (open) {
       html += '<div class="course-edit">' +
         '<div class="field"><label>코스 이름 <span class="muted">(모든 홀 공통)</span></label><input type="text" data-course="name" value="' + esc(r.course || '') + '" maxlength="' + S.COURSE_MAX + '" placeholder="예: 베어크리크 포천 · 베어" autocomplete="off"></div>' +
         '<div class="row top"><div class="field"><label>' + (h + 1) + '번홀 거리 (m)</label><input type="number" inputmode="numeric" min="0" max="999" data-hi="dist" value="' + (info.dist || '') + '" placeholder="예: 350" class="short"></div>' +
@@ -500,23 +538,28 @@
           return '<button class="chip tap ' + (info.haz & e[0] ? 'active' : '') + '" data-action="hi-haz" data-bit="' + e[0] + '">' + e[1] + '</button>';
         }).join('') + '</div></div>' +
         '<div class="field"><label>공략 메모</label><input type="text" data-hi="memo" value="' + esc(info.memo) + '" maxlength="' + S.MEMO_MAX + '" placeholder="예: 티샷은 우측 벙커 방향, 그린 뒤는 내리막" autocomplete="off"></div>' +
-        '<div class="row" style="flex-wrap:wrap"><button class="btn sm" data-action="course-save">이 코스 저장</button>' +
-        (q ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="https://map.naver.com/p/search/' + encodeURIComponent(q + ' 골프') + '">네이버 지도에서 보기 ↗</a>' : '') + '</div>' +
-        '<div class="muted small">입력한 내용은 함께 입력 중인 동반자 화면에도 바로 반영돼요. 코스를 저장하면 다음 라운드에서 파·핸디캡·홀 정보를 그대로 불러올 수 있어요.</div></div>';
+        '<div class="row" id="course-actions" style="flex-wrap:wrap">' + courseActions(r) + '</div></div>';
     }
+    if (open) html += '<div class="muted small" style="margin-top:8px">입력한 내용은 함께 입력 중인 동반자 화면에도 바로 반영돼요. 라운드를 마치면 고친 내용이 코스에 저장돼 다음 라운드에서 그대로 불러올 수 있어요.</div>';
     return html + '</div>';
   }
-  /** 코스 이름·거리·메모 입력: 저장하고, 입력란은 그대로 둔 채 요약/공략/약도 영역만 다시 그린다 */
+  /** 코스 이름·거리·메모 입력: 저장하고, 입력란은 그대로 둔 채 요약 줄·공략·약도(이름이면 버튼 줄도)만 다시 그린다 */
   function courseInput(el) {
     var r = state.round; if (!r || state.readOnly) return;
-    var h = r.currentHole;
-    if (el.dataset.course === 'name') S.setKey(r, 'course', el.value);
+    var h = r.currentHole, isName = el.dataset.course === 'name';
+    if (isName) S.setKey(r, 'course', el.value);
     else if (el.dataset.hi === 'dist') setHoleInfo(r, h, 'dist', el.value === '' ? null : Number(el.value));
     else if (el.dataset.hi === 'memo') setHoleInfo(r, h, 'memo', el.value);
     else return;
     save();
-    var live = document.getElementById('course-live');
-    if (live) live.innerHTML = courseLive(r, h, r.pars[h]);
+    var set = function (id, html) { var n = document.getElementById(id); if (n) n.innerHTML = html; return n; };
+    set('course-live', courseLive(r, h, r.pars[h]));
+    set('course-sum', courseSumInner(r, h));
+    if (isName) {
+      set('course-actions', courseActions(r));
+      var hs = set('course-headsum', esc(r.course || '거리 · 형태 · 위험 요소 · 메모'));
+      if (hs) hs.className = 'sumtxt' + (r.course ? '' : ' none');
+    }
   }
   /** 기기에 코스 저장 (이름 + 홀 수 기준으로 덮어씀). 새 라운드에서 같은 이름을 고르면 파·핸디캡·홀 정보가 채워진다 */
   function saveCourse(r) {
@@ -525,6 +568,53 @@
     state.courses.unshift({ name: name, holes: r.holes, pars: r.pars.slice(), strokeIndex: r.strokeIndex.slice(), holeInfo: clone(r.holeInfo || {}), updatedAt: Date.now() });
     if (state.courses.length > 30) state.courses.length = 30;
     return true;
+  }
+  function savedCourse(name, holes) {
+    name = (name || '').trim();
+    return (state.courses || []).filter(function (c) { return c && c.name === name && c.holes === holes; })[0] || null;
+  }
+  function builtinCourse(name, holes) {
+    name = (name || '').trim();
+    return BUILTIN_COURSES.filter(function (c) { return c.name === name && c.holes === holes; })[0] || null;
+  }
+  /** 파·핸디캡·홀 정보가 같은지 비교하기 위한 서명 */
+  function courseSig(c) {
+    var out = [], pars = c.pars || [], si = c.strokeIndex || [];
+    for (var h = 0; h < c.holes; h++) { var i = A.holeInfo(c, h); out.push([Number(pars[h]), Number(si[h]), i.dist, i.shape, i.haz, i.memo]); }
+    return JSON.stringify(out);
+  }
+  /**
+   * 라운드를 기록으로 보낼 때의 자동 저장. '이 코스 저장' 버튼과 달리 저장해 둔 코스를 통째로 덮어쓰지 않는다.
+   *  - 같은 이름으로 저장한 코스가 없으면 새로 저장한다. 단, 기본 제공 코스와 내용이 같으면 사본을 만들지 않는다
+   *    (사본이 생기면 기본 제공 코스를 가려서, 나중에 기본 코스가 바로잡혀도 반영되지 않는다).
+   *  - 저장한 코스가 있으면 이번 라운드에서 실제로 고친 칸만 반영한다 (그 칸의 수정 시각이 라운드 생성 시각보다 뒤인 것).
+   *    코스를 불러오지 않고 이름만 적은 라운드나 다른 사람이 만든 라운드에 참여한 경우에도 내가 저장해 둔 파·거리·메모가 지워지지 않는다.
+   */
+  function autoSaveCourse(r) {
+    var name = (r.course || '').trim(); if (!name) return;
+    var old = savedCourse(name, r.holes);
+    if (!old || !Array.isArray(old.pars) || old.pars.length !== r.holes || !Array.isArray(old.strokeIndex) || old.strokeIndex.length !== r.holes) {
+      var bi = old ? null : builtinCourse(name, r.holes);
+      if (bi && courseSig(bi) === courseSig(r)) return;
+      saveCourse(r); return;
+    }
+    var rev = r.rev || {}, t0 = r.createdAt || 0, n = 0;
+    function edited(k) { return !!rev[k] && rev[k].ts > t0; }
+    old.holeInfo = old.holeInfo || {};
+    for (var h = 0; h < r.holes; h++) {
+      if (edited('par:' + h) && old.pars[h] !== r.pars[h]) { old.pars[h] = r.pars[h]; n++; }
+      if (edited('si:' + h) && old.strokeIndex[h] !== r.strokeIndex[h]) { old.strokeIndex[h] = r.strokeIndex[h]; n++; }
+      var cur = A.holeInfo(r, h), info = Object.assign({}, old.holeInfo[h] || {}), before = JSON.stringify(info);
+      S.HOLE_FIELDS.forEach(function (f) { if (edited('hi:' + h + ':' + f)) { if (cur[f]) info[f] = cur[f]; else delete info[f]; } });
+      var mask = A.holeInfo(old, h).haz;
+      S.HAZ_BITS.forEach(function (bit) { if (edited('hi:' + h + ':z' + bit)) mask = (cur.haz & bit) ? (mask | bit) : (mask & ~bit); });
+      if (mask) info.haz = mask; else delete info.haz;
+      if (JSON.stringify(info) === before) continue;
+      n++;
+      if (Object.keys(info).length) old.holeInfo[h] = info; else delete old.holeInfo[h];
+    }
+    if (n) old.updatedAt = Date.now();
+    state.courses = [old].concat(state.courses.filter(function (c) { return c !== old; })); // 최근에 친 코스가 앞에 오도록
   }
   /** 고를 수 있는 코스: 내가 저장한 코스가 먼저, 그다음 기본 제공 코스(같은 이름을 저장했다면 내 것이 우선) */
   function courseList(holes) {
@@ -779,7 +869,7 @@
           return '<button class="chip tap ' + ((d.course || '').trim() === c.name ? 'active' : '') + '" data-action="pick-course" data-name="' + esc(c.name) + '">' + esc(c.name) + '</button>';
         }).join('') + '</div>';
       })() + '</div>' +
-      '<div class="muted small">' + (findCourse(d.course, d.holes) ? (isBuiltinCourse(d.course, d.holes) ? '공개 자료를 정리한 기본 제공 코스예요. 파·핸디캡·거리(화이트티)가 채워지고, 현장 스코어카드와 다르면 입력 화면에서 바로 고칠 수 있어요.' : '저장된 코스의 파·핸디캡·홀 정보로 시작해요.') : '파/핸디캡 인덱스는 기본값(파72)으로 시작하고, 스코어 입력 화면에서 홀마다 파·거리·위험 요소·메모를 넣을 수 있어요.') + '</div></div></div>';
+      '<div class="muted small">' + (findCourse(d.course, d.holes) ? (isBuiltinCourse(d.course, d.holes) ? '공개 자료를 정리한 기본 제공 코스예요. 파·핸디캡·거리(화이트티)가 채워지고, 현장 스코어카드와 다르면 입력 화면에서 바로 고칠 수 있어요.' : '내가 저장한 코스의 파·핸디캡·홀 정보로 시작해요. <button class="btn sm ghost" data-action="del-course">' + (builtinCourse(d.course, d.holes) ? '기본 제공 값으로 되돌리기' : '저장한 코스 삭제') + '</button>') : '파/핸디캡 인덱스는 기본값(파72)으로 시작하고, 스코어 입력 화면에서 홀마다 파·거리·위험 요소·메모를 넣을 수 있어요.') + '</div></div></div>';
     html += playersSection('draft', d.players, true);
     html += '<h2 style="margin:4px 2px -4px;font-size:16px">게임 & 정산</h2>';
     html += gamesSection('draft', d.games, d.holes);
@@ -831,13 +921,17 @@
     players.forEach(function (p) { scores[p.id] = new Array(d.holes).fill(null); });
     var now = Date.now();
     clearScan(); closeSession();
-    var cname = (d.course || '').trim().slice(0, S.COURSE_MAX), saved = findCourse(cname, d.holes); // 저장된 코스면 파·핸디캡·홀 정보를 불러옴
+    var txt = function (s) { return String(s || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim(); }; // 붙여 넣은 글에 섞인 탭 등 제어 문자는 공백으로
+    var cname = txt(d.course).slice(0, S.COURSE_MAX), saved = findCourse(cname, d.holes); // 저장된 코스면 파·핸디캡·홀 정보를 불러옴
     state.round = {
-      id: uid(), name: (d.name.trim() || cname || ('라운드 ' + d.date)).slice(0, 60), date: d.date, holes: d.holes,
+      id: uid(), name: (txt(d.name) || cname || ('라운드 ' + d.date)).slice(0, 60), date: d.date, holes: d.holes,
       pars: saved ? saved.pars.slice() : G.defaultPars(d.holes), strokeIndex: saved ? saved.strokeIndex.slice() : G.defaultStrokeIndex(d.holes),
       course: cname, holeInfo: saved ? clone(saved.holeInfo || {}) : {}, stats: {},
       players: players, scores: scores, extras: {}, games: clone(d.games), status: 'live', rev: {}, currentHole: 0, createdAt: now
     };
+    if (saved) state.round.courseFrom = cname; // 이 기기에서 불러온 코스로 시작함 (기기 전용 표시, 공유되지 않음)
+    // 처음 넣는 값(이름·코스·불러온 파/핸디캡/홀 정보)도 공유 수신 측(setKey)과 같은 규칙으로 정규화 → 호스트와 참여자가 같은 값을 갖도록
+    S.allKeys(state.round).forEach(function (k) { if (k === 'meta') return; var v = S.getKey(state.round, k); if (v !== undefined) S.setKey(state.round, k, v); });
     S.stampAll(state.round, now, state.clientId);
     resetBaseline();
     state.setupError = null; state.readOnly = false; state.viewRoundId = null; state.boardTab = 'stroke'; state.me = null;
@@ -854,30 +948,31 @@
     var sm = G.strokesMap(r);
     var allIn = r.players.every(function (p) { return G.gross(r, p.id, h) !== null; });
     var me = myPid();
-    var html = topbar(r.name, (h + 1) + '/' + r.holes + '홀', backBtn('home'), statusPill('play') + '<button class="iconbtn" data-action="go" data-view="settings">⚙︎</button>');
+    // data-region: 입력란에 커서가 있는 동안에도 따로 갱신할 수 있는 영역 (softRender → patchRegions)
+    var html = '<div data-region="top" style="display:contents">' + topbar(r.name, (h + 1) + '/' + r.holes + '홀', backBtn('home'), statusPill('play') + '<button class="iconbtn" data-action="go" data-view="settings">⚙︎</button>') + '</div>';
     html += '<div class="screen">';
-    html += finishedBanner(r);
-    html += meChooser(r);
-    html += '<div class="card"><div class="holehead"><div class="num">' + (h + 1) + '<small>번홀</small></div><div class="meta">' +
+    html += '<div data-region="banner" style="display:contents">' + finishedBanner(r) + meChooser(r) + '</div>';
+    // 점수 칸 위쪽은 내용이 바뀌어도 높이가 변하지 않게 유지한다 (높이가 변하면 ＋/− 버튼이 밀려 다른 사람 점수를 누르게 됨)
+    html += '<div class="card" data-region="head"><div class="holehead"><div class="num">' + (h + 1) + '<small>번홀</small></div><div class="meta">' +
       '<div class="row"><span class="small muted">파</span>' + seg('round.pars.' + h, par, [[3, '3'], [4, '4'], [5, '5']]) +
       '<span class="si" style="margin-left:auto">HCP <input type="number" inputmode="numeric" min="1" max="' + r.holes + '" data-bind="round.strokeIndex.' + h + '" data-type="number" value="' + r.strokeIndex[h] + '"></span></div>' +
       '</div></div>';
     html += '<div class="hole-strip">' + holeStrip(r, h) + '</div>';
-    html += courseBlock(r, h, par);
-    if (!sharingActive() && holesDone(r) < 2 && !state.hintSeen) html += '<div class="muted small" style="margin-top:6px">동반자도 각자 입력하게 하려면 위의 <b>👥 함께</b>를 눌러 코드를 보내세요. <button class="btn sm ghost" data-action="dismiss-hint">닫기</button></div>';
+    html += '<button class="course-sum" id="course-sum" data-action="course-jump" aria-label="이 홀 코스 정보 보기">' + courseSumInner(r, h) + '</button>';
     html += '</div>';
-    var mode = entryMode(r);
-    html += '<div class="card">' + entryBar(r, me, mode) + r.players.map(function (p) {
+    var mode = entryMode(r), open = state.detailOpen || {};
+    html += '<div class="card" data-region="scores">' + entryBar(r, me, mode) + r.players.map(function (p) {
       var s = G.gross(r, p.id, h);
       var st = sm[p.id][h];
       var tot = runningTotal(r, p.id);
       var diff = s === null ? null : s - par;
       var pid = esc(p.id);
       var editable = canEdit(r, p.id);
+      var tags = statTags(r, p.id, h); // 줄 높이에 영향을 주지 않도록 이름·누적 타수 아래 여백에 겹쳐 그린다
       var row = '<div class="scorerow ' + (me === p.id ? 'mine' : '') + (editable ? '' : ' locked') + '">' +
         '<div class="who"><div class="name">' + badge(p.team) + '<span>' + esc(p.name) + '</span></div>' +
         '<div class="meta"><span>' + tot.gross + '타</span><span class="tp ' + tpClass(tot.toPar) + '">' + G.fmtToPar(tot.toPar) + '</span>' +
-        (p.hcp ? '<span>H' + esc(p.hcp) + '</span>' : '') + (st ? '<span class="dots" title="이 홀 핸디 타수">' + '●'.repeat(st) + '</span>' : '') + statTags(r, p.id, h) + '</div></div>';
+        (p.hcp ? '<span>H' + esc(p.hcp) + '</span>' : '') + (st ? '<span class="dots" title="이 홀 핸디 타수">' + '●'.repeat(st) + '</span>' : '') + '</div>' + (tags ? '<div class="tags">' + tags + '</div>' : '') + '</div>';
       if (editable) {
         row += '<button class="pm" data-action="score" data-pid="' + pid + '" data-delta="-1">−</button>' +
           '<button class="scorebox ' + (s !== null ? 'set' : '') + '" data-action="score-tap" data-pid="' + pid + '">' +
@@ -891,17 +986,19 @@
           '</div><span></span>';
       }
       row += '</div>';
-      if (editable && state.detailOn) row += detailBlock(r, p, h, par, state.detailPid === p.id);
+      if (editable && state.detailOn) row += detailBlock(r, p, h, par, !!open[p.id]);
       return row;
     }).join('');
     html += '<div class="quick" style="margin-top:10px">' +
       (mode === 'all' ? '<button class="btn sm grow" data-action="par-all">전원 파 입력</button><button class="btn sm ghost" data-action="clear-hole">홀 초기화</button>' : '') +
       '<button class="btn sm ' + (state.detailOn ? 'on' : '') + (mode === 'all' ? '' : ' grow') + '" data-action="toggle-detail" aria-pressed="' + (state.detailOn ? 'true' : 'false') + '">📝 상세 기록' + (state.detailOn ? ' 끄기' : '') + '</button></div>';
     if (mode === 'mine') html += '<div class="muted small" style="margin-top:8px">다른 사람 점수는 각자 입력하면 여기에 바로 보여요. 폰이 없는 동반자 점수는 위에서 <b>모두 입력</b>으로 바꿔 넣을 수 있어요.</div>';
+    if (!sharingActive() && holesDone(r) < 2 && !state.hintSeen) html += '<div class="muted small" style="margin-top:8px">동반자도 각자 입력하게 하려면 맨 위의 <b>👥 함께</b>를 눌러 코드를 보내세요. <button class="btn sm ghost" data-action="dismiss-hint">닫기</button></div>';
     html += '</div>';
-    html += coachCard(r);
+    html += courseBlock(r, h, par);
+    html += '<div data-region="coach" style="display:contents">' + coachCard(r) + '</div>';
     var ex = (r.extras && r.extras[h]) || {};
-    html += '<div class="card"><h2>니어 / 롱기 <span class="hint">받는 사람 선택 (선택)</span></h2><div class="stack">' +
+    html += '<div class="card" data-region="extras"><h2>니어 / 롱기 <span class="hint">받는 사람 선택 (선택)</span></h2><div class="stack">' +
       '<div class="chips"><span class="small muted blab">니어리스트</span>' + r.players.map(function (p) {
         return '<button class="chip accent ' + (ex.nearest === p.id ? 'active' : '') + '" data-action="extra" data-type="nearest" data-pid="' + esc(p.id) + '">' + esc(p.name) + '</button>';
       }).join('') + '</div>' +
@@ -909,8 +1006,8 @@
         return '<button class="chip accent ' + (ex.longest === p.id ? 'active' : '') + '" data-action="extra" data-type="longest" data-pid="' + esc(p.id) + '">' + esc(p.name) + '</button>';
       }).join('') + '</div>' +
       '</div></div>';
-    html += liveSummary(r);
-    html += '<div class="navbtns"><button class="btn" data-action="hole" data-i="' + (h - 1) + '" ' + (h === 0 ? 'disabled' : '') + '>‹ 이전 홀</button>' +
+    html += '<div data-region="summary" style="display:contents">' + liveSummary(r) + '</div>';
+    html += '<div class="navbtns" data-region="nav"><button class="btn" data-action="hole" data-i="' + (h - 1) + '" ' + (h === 0 ? 'disabled' : '') + '>‹ 이전 홀</button>' +
       (h === r.holes - 1 ? '<button class="btn primary" data-action="finish">라운드 종료 🏁</button>'
         : '<button class="btn ' + (allIn ? 'primary' : '') + '" data-action="hole" data-i="' + (h + 1) + '">다음 홀 ›</button>') + '</div>';
     html += '</div>';
@@ -1216,8 +1313,8 @@
     if (stt.hot) notes.push('🔥 최근 3홀 흐름이 가장 좋은 사람은 <b>' + esc(stt.hot.name) + '</b> (' + G.fmtToPar(stt.hot.toPar) + ')');
     if (stt.hardest) notes.push('⛰️ 가장 어려웠던 홀은 <b>' + (stt.hardest.h + 1) + '번홀</b> (평균 ' + A.fmtAvg(stt.hardest.avg) + ')');
     if (stt.easiest) notes.push('🌿 가장 쉬웠던 홀은 <b>' + (stt.easiest.h + 1) + '번홀</b> (평균 ' + A.fmtAvg(stt.easiest.avg) + ')');
-    if (act.some(function (p) { return p.played !== act[0].played; })) notes.push('입력한 홀 수가 서로 달라 순위는 참고용이에요.');
-    return '<div class="card"><h2>' + (stt.finished ? '최종 결과' : '경기 현황') + ' <span class="hint">' + (stt.finished ? r.holes + '홀 종료' : '전원 입력 ' + stt.thruAll + '/' + r.holes + '홀') + '</span></h2>' +
+    if (!stt.even) notes.push('입력한 홀이 서로 달라 순위는 참고용이에요.');
+    return '<div class="card"><h2>' + (stt.finished ? '최종 결과' : '경기 현황') + ' <span class="hint">' + (stt.thruAll === r.holes ? r.holes + '홀 종료' : '전원 입력 ' + stt.thruAll + '/' + r.holes + '홀') + '</span></h2>' +
       '<table><thead><tr><th></th><th class="l">플레이어</th><th>진행</th><th>타수</th><th>±</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
       (notes.length ? '<div class="stack small" style="margin-top:10px">' + notes.map(function (n) { return '<div>' + n + '</div>'; }).join('') + '</div>' : '') + '</div>';
   }
@@ -1288,6 +1385,16 @@
       '<div class="chart"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="홀별 누적 스코어 흐름 그래프">' + svg + '</svg></div>' + readout +
       '<div class="muted small" style="margin-top:6px">홀별 타수 표는 <button class="linkbtn" data-action="go" data-view="card">스코어카드</button>에서 볼 수 있어요.</div></div>';
   }
+  /** 분석용 경기 현황: 기록(지난 라운드)으로 보는 라운드는 홀이 덜 채워졌어도 끝난 라운드로 본다 (종료를 누르지 않고 보관된 라운드 포함) */
+  function analysisStatus(r) { return A.roundStatus(r, { archived: state.readOnly || r !== state.round }); }
+  /** 18홀 출발 홀: 기본은 입력 순서로 추정(자동). 지난 홀을 나중에 몰아서 입력해 순서가 틀리게 잡히면 직접 고를 수 있다 (이 기기에만 저장) */
+  function startSeg(r, stt) {
+    var cur = r.startBack === true ? 'in' : r.startBack === false ? 'out' : 'auto';
+    var opts = [['auto', cur === 'auto' ? '자동 (' + (stt.startBack ? '10번홀' : '1번홀') + ')' : '자동'], ['out', '1번홀'], ['in', '10번홀']];
+    return '<div class="row between" style="margin-top:10px;flex-wrap:wrap"><span class="small muted">출발 홀</span><div class="seg sm">' + opts.map(function (o) {
+      return '<button type="button" data-action="an-start" data-v="' + o[0] + '" class="' + (cur === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
+    }).join('') + '</div></div>';
+  }
   function playerAnalysis(r, stt, sel) {
     var st = stt.stats[sel], name = nameOf(r, sel), html = '';
     if (!st.played) return '<div class="card"><div class="muted">' + esc(name) + '님의 스코어가 아직 없어요. 스코어를 입력하면 분석이 시작돼요.</div></div>';
@@ -1311,7 +1418,7 @@
       return '<tr><td class="l">파' + t + '</td><td>' + b.n + '홀</td><td>' + (t + b.toPar / b.n).toFixed(1) + '타</td><td><b>' + A.fmtAvg(b.toPar / b.n) + '</b></td><td>' + G.fmtToPar(b.toPar) + '</td></tr>';
     }).join('');
     html += '<div class="card"><h2>파별 성적</h2><table><thead><tr><th class="l"></th><th>홀 수</th><th>평균 타수</th><th>평균 ±</th><th>합계</th></tr></thead><tbody>' + parRows + '</tbody></table>' +
-      (st.nines ? '<div class="tiles two" style="margin-top:10px">' + st.nines.map(function (nn) { return tile(nn.label, nn.n ? G.fmtToPar(nn.toPar) : '-', nn.n ? nn.n + '홀' : '아직 없음'); }).join('') + '</div>' : '') + '</div>';
+      (st.nines ? '<div class="tiles two" style="margin-top:10px">' + st.nines.map(function (nn) { return tile(nn.label, nn.n ? G.fmtToPar(nn.toPar) : '-', nn.n ? nn.n + '홀' : '아직 없음'); }).join('') + '</div>' + startSeg(r, stt) : '') + '</div>';
     var kv = [];
     if (st.detailHoles) {
       kv.push(['OB', st.ob ? st.ob + '회' : '없음']);
@@ -1348,7 +1455,7 @@
   function viewAnalysis() {
     var r = getRound();
     if (!r) { state.view = 'home'; return viewHome(); }
-    var stt = A.roundStatus(r), me = myPid();
+    var stt = analysisStatus(r), me = myPid();
     var first = stt.players[0];
     var sel = G.playerById(r, state.anPid) ? state.anPid : (me || (first && first.played ? first.id : r.players[0].id));
     var html = topbar(r.name, state.readOnly ? '기록 분석' : '경기 분석', backBtn('home'), state.readOnly ? '' : statusPill('analysis'));
@@ -1363,8 +1470,9 @@
   }
   /** 단톡방 등에 붙여 넣을 분석 요약: 플레이어별 기록과 격려·팁 한 줄씩 */
   function analysisText(r) {
-    var stt = A.roundStatus(r);
-    var lines = ['📊 ' + r.name + (r.course && r.name.indexOf(r.course) < 0 ? ' @ ' + r.course : '') + ' (' + r.date + ') ' + (stt.finished ? '라운드 분석' : '중간 분석 · 전원 입력 ' + stt.thruAll + '/' + r.holes + '홀'), ''];
+    var stt = analysisStatus(r);
+    var lines = ['📊 ' + r.name + (r.course && r.name.indexOf(r.course) < 0 ? ' @ ' + r.course : '') + ' (' + r.date + ') ' + (stt.finished ? '라운드 분석' : '중간 분석') + (stt.thruAll < r.holes ? ' · 전원 입력 ' + stt.thruAll + '/' + r.holes + '홀' : ''), ''];
+    if (!stt.even) lines.push('※ 입력한 홀이 서로 달라 순위는 참고용이에요.', '');
     stt.players.forEach(function (p) {
       if (!p.played) return;
       var st = stt.stats[p.id], c = A.coach(r, p.id, stt);
@@ -1417,17 +1525,32 @@
   }
 
   // ───────────────────────── 렌더 & 이벤트 ─────────────────────────
-  function render() {
+  function viewHtml() {
     var views = { home: viewHome, setup: viewSetup, settings: viewSettings, play: viewPlay, board: viewBoard, card: viewCard, analysis: viewAnalysis, share: viewShare, joining: viewJoining };
     if (!views[state.view]) state.view = 'home';
     if ((state.view === 'play' || state.view === 'settings' || state.view === 'share') && !state.round) state.view = 'home';
     if (state.view === 'joining' && !state.joining) state.view = 'home';
+    // 입력·설정·공유 화면은 항상 진행 중인 라운드를 다룬다. 지난 라운드 보기 표시가 남아 있으면 입력이 통째로 잠기므로 여기서 해제
+    if (state.readOnly && (state.view === 'play' || state.view === 'settings' || state.view === 'share')) { state.readOnly = false; state.viewRoundId = null; }
     if (state.view === 'setup' && !state.draft) state.draft = newDraft();
-    var y = window.scrollY;
-    $app.innerHTML = views[state.view]();
-    window.scrollTo(0, y);
+    return views[state.view]();
+  }
+  function centerHoleStrip() {
     var strip = $app.querySelector('.hole-strip'), cur = strip && strip.querySelector('.cur');
     if (cur) strip.scrollLeft = Math.max(0, cur.offsetLeft - strip.clientWidth / 2 + cur.offsetWidth / 2);
+  }
+  function render() {
+    var y = window.scrollY;
+    $app.innerHTML = viewHtml();
+    window.scrollTo(0, y);
+    centerHoleStrip();
+  }
+  /** 다시 그린 뒤에도 방금 누른 버튼(sel)이 손가락 아래 그대로 있도록 스크롤을 맞춘다 (위쪽 내용이 늘거나 줄 때) */
+  function renderKeeping(sel) {
+    var a = $app.querySelector(sel), top0 = a ? a.getBoundingClientRect().top : null;
+    render();
+    var b = $app.querySelector(sel);
+    if (top0 !== null && b) window.scrollBy(0, b.getBoundingClientRect().top - top0);
   }
 
   function finishRound() {
@@ -1456,7 +1579,8 @@
   function archiveCurrent() {
     var r = state.round; if (!r) return;
     r.finishedAt = r.finishedAt || Date.now();
-    saveCourse(r); // 코스 이름을 넣은 라운드는 코스 정보를 기기에 저장해 다음에 불러올 수 있게 함
+    autoSaveCourse(r); // 코스 이름을 넣은 라운드는 코스 정보를 기기에 저장 (이미 저장해 둔 코스에는 이번 라운드에서 고친 칸만 반영)
+    delete r.courseFrom;
     state.history = state.history.filter(function (h) { return h.id !== r.id; });
     state.history.unshift(r);
     if (state.history.length > 50) state.history.length = 50;
@@ -1550,10 +1674,12 @@
     // 상세 기록 (선택 입력)
     'toggle-detail': function () {
       state.detailOn = !state.detailOn;
-      state.detailPid = state.detailOn ? (myPid() || state.detailPid || null) : null;
-      save(); render();
+      state.detailOpen = {};
+      if (state.detailOn && myPid()) state.detailOpen[myPid()] = true; // 내 줄은 바로 펼침
+      save(); renderKeeping('[data-action="toggle-detail"]'); // 버튼 위에 줄이 생기거나 사라져도 버튼은 제자리에
     },
-    'detail-open': function (d) { state.detailPid = state.detailPid === d.pid ? null : d.pid; save(); render(); },
+    // 여러 사람의 상세 기록을 함께 펼쳐 둘 수 있다: 하나를 열 때 다른 줄을 접으면 누른 자리가 위로 밀려 엉뚱한 칸을 누르게 됨
+    'detail-open': function (d) { var o = state.detailOpen = state.detailOpen || {}; if (o[d.pid]) delete o[d.pid]; else o[d.pid] = true; save(); render(); },
     stat: function (d) { // OB·해저드·벙커 횟수 ±1
       var r = state.round, f = d.f;
       if (!r || !G.playerById(r, d.pid) || !canEdit(r, d.pid) || (f !== 'ob' && f !== 'hz' && f !== 'bk')) return;
@@ -1572,30 +1698,57 @@
     'entry-mode': function (d) {
       var r = state.round; if (!r || !myPid()) return;
       state.entry = { roundId: r.id, mode: d.mode === 'mine' ? 'mine' : 'all' };
-      if (state.detailOn) state.detailPid = myPid();
+      if (state.detailOn) (state.detailOpen = state.detailOpen || {})[myPid()] = true;
       save(); render();
     },
     // 코스 정보
     'course-toggle': function () { state.courseOpen = !state.courseOpen; save(); render(); },
+    'course-jump': function () { // 홀 카드의 요약 줄 → 아래 코스 정보 카드로 이동 (정보가 없는 홀이면 입력란을 펼침)
+      var r = state.round; if (!r) return;
+      if (!state.courseOpen && !A.hasHoleInfo(r, r.currentHole)) { state.courseOpen = true; save(); render(); }
+      var card = document.getElementById('course-card');
+      if (card) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    },
     'hi-shape': function (d) {
       var r = state.round; if (!r || state.readOnly) return;
       var h = r.currentHole, cur = A.holeInfo(r, h).shape;
       setHoleInfo(r, h, 'shape', cur === d.v ? null : d.v); save(); render();
     },
     'hi-haz': function (d) {
-      var r = state.round, bit = Number(d.bit); if (!r || state.readOnly || !(bit > 0 && bit < 256)) return;
+      var r = state.round, bit = Number(d.bit); if (!r || state.readOnly) return;
       var h = r.currentHole;
-      setHoleInfo(r, h, 'haz', A.holeInfo(r, h).haz ^ bit); save(); render();
+      // 누른 위험 요소 하나만 바꾼다(비트별 공유 키) → 동반자가 같은 홀의 다른 위험 요소를 동시에 표시해도 서로 지우지 않음
+      if (!setHoleInfo(r, h, 'z' + bit, (A.holeInfo(r, h).haz & bit) ? null : 1)) return;
+      save(); render();
     },
-    'course-save': function () {
+    'course-save': function () { // 지금 라운드의 파·핸디캡·홀 정보로 코스를 통째로 저장 (자동 저장과 달리 덮어씀)
       var r = state.round; if (!r) return;
-      if (!saveCourse(r)) { toast('코스 이름을 먼저 입력하세요'); return; }
+      var name = (r.course || '').trim();
+      if (!name) { toast('코스 이름을 먼저 입력하세요'); return; }
+      var old = savedCourse(name, r.holes);
+      if (old && r.courseFrom !== name && courseSig(old) !== courseSig(r) &&
+        !confirm("이미 저장한 '" + name + "' 코스가 있어요.\n지금 라운드의 파·핸디캡·홀 정보로 바꿀까요? (저장해 둔 홀 정보는 사라져요)")) return;
+      saveCourse(r); r.courseFrom = name;
       save(); toast('코스를 저장했어요. 새 라운드에서 불러올 수 있어요');
+    },
+    'del-course': function () { // 저장한 코스 삭제 (같은 이름의 기본 제공 코스가 있으면 그 값으로 되돌아감)
+      var d = state.draft; if (!d) return;
+      var name = (d.course || '').trim(), bi = builtinCourse(name, d.holes);
+      if (!savedCourse(name, d.holes)) return;
+      if (!confirm(bi ? "내가 저장한 '" + name + "' 코스를 지우고 기본 제공 값으로 되돌릴까요?" : "저장한 '" + name + "' 코스를 삭제할까요? (지난 라운드 기록은 그대로예요)")) return;
+      state.courses = (state.courses || []).filter(function (c) { return !(c && c.name === name && c.holes === d.holes); });
+      if (!bi) d.course = '';
+      save(); render();
     },
     'pick-course': function (d) { if (!state.draft) return; state.draft.course = (state.draft.course || '').trim() === d.name ? '' : d.name; save(); render(); },
     // 분석 화면
     'an-player': function (d) { state.anPid = d.pid; state.anHole = null; save(); render(); },
     'an-hole': function (d) { var i = Number(d.i); state.anHole = state.anHole === i ? null : i; save(); render(); },
+    'an-start': function (d) { // 출발 홀 직접 지정 (이 기기에만 저장, 공유되지 않음)
+      var r = getRound(); if (!r || r.holes !== 18) return;
+      if (d.v === 'in') r.startBack = true; else if (d.v === 'out') r.startBack = false; else delete r.startBack;
+      state.anHole = null; save(); render();
+    },
     'share-analysis': function () {
       var r = getRound(); if (!r) return;
       var text = analysisText(r);
@@ -1637,7 +1790,7 @@
       state.me = (state.me && state.me.roundId === r.id && state.me.pid === d.pid) ? null : { roundId: r.id, pid: d.pid };
       // 함께 입력 중 내가 누구인지 정하면: 참여자는 '내 점수만', 방을 만든 사람은 '모두 입력'이 기본 (언제든 바꿀 수 있음)
       if (state.me && r === state.round && sharingActive() && !(state.entry && state.entry.roundId === r.id)) state.entry = { roundId: r.id, mode: isHost() ? 'all' : 'mine' };
-      if (state.me && state.detailOn) state.detailPid = state.me.pid;
+      if (state.me && state.detailOn) (state.detailOpen = state.detailOpen || {})[state.me.pid] = true;
       if (session) session.setName(myName());
       save(); render();
     },

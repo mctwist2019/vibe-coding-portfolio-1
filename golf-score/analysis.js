@@ -38,6 +38,8 @@
     if (n !== 18) return { order: natural, startBack: false };
     for (i = 9; i < 18; i++) back.push(i);
     for (i = 0; i < 9; i++) back.push(i);
+    // 출발 코스를 직접 지정했으면 그 값이 우선: 지난 홀을 나중에 몰아서 입력하면 입력 시각만으로는 친 순서를 알 수 없다
+    if (round.startBack === true || round.startBack === false) return { order: round.startBack ? back : natural, startBack: round.startBack };
     function any(h) { return round.players.some(function (p) { return G.gross(round, p.id, h) !== null; }); }
     function count(a, b) { var c = 0; for (var h = a; h < b; h++) if (any(h)) c++; return c; }
     function minTs(a, b) {
@@ -59,8 +61,8 @@
     return { order: startBack ? back : natural, startBack: startBack };
   }
 
-  /** 플레이어 한 명의 통계 */
-  function playerStats(round, pid, ord) {
+  /** 플레이어 한 명의 통계. skipHole을 주면 그 홀은 빼고 집계한다 */
+  function playerStats(round, pid, ord, skipHole) {
     ord = ord || playOrder(round);
     var pars = round.pars;
     var st = {
@@ -83,7 +85,7 @@
     var cum = 0, run = 0, prevDiff = null;
     ord.order.forEach(function (h) {
       var g = G.gross(round, pid, h);
-      if (g === null) return; // 스코어가 없는 홀은 상세 기록도 집계하지 않음 (스코어를 지운 뒤 남은 기록이 섞이지 않게)
+      if (g === null || h === skipHole) return; // 스코어가 없는 홀은 상세 기록도 집계하지 않음 (스코어를 지운 뒤 남은 기록이 섞이지 않게)
       var ob = stat(round, pid, h, 'ob'), hz = stat(round, pid, h, 'hz'), bk = stat(round, pid, h, 'bk');
       var pt = stat(round, pid, h, 'pt'), fw = stat(round, pid, h, 'fw');
       if (ob !== null || hz !== null || bk !== null || pt !== null || fw !== null) st.detailHoles++;
@@ -131,8 +133,8 @@
     return null;
   }
 
-  /** 경기 현황 (라운드 중간에도 사용) */
-  function roundStatus(round) {
+  /** 경기 현황 (라운드 중간에도 사용). opts.archived = 기록으로 보관된 라운드(홀이 덜 채워졌어도 끝난 라운드로 본다) */
+  function roundStatus(round, opts) {
     var ord = playOrder(round);
     var rows = G.strokePlay(round, {}).rows;
     var stats = {};
@@ -143,9 +145,28 @@
     active.forEach(function (r) { rankCount[r.rank] = (rankCount[r.rank] || 0) + 1; });
     var thruAll = 0, h;
     for (h = 0; h < round.holes; h++) if (round.players.every(function (p) { return G.gross(round, p.id, h) !== null; })) thruAll++;
+    // 순위를 말해도 되는지: 파 대비 누적은 입력한 홀이 다르면 먼저 입력한 사람이 불리해 보인다.
+    //  even    = 스코어가 있는 사람 모두가 정확히 같은 홀들을 입력함 (표의 순위를 그대로 믿어도 됨)
+    //  cmpGap  = 모두가 입력한 홀(공통 홀)까지만 비교한 선두와의 타수 차. 각자 입력하는 '내 점수만' 모드에서
+    //            한 사람이 한 홀 먼저 입력해도 순위 멘트가 뒤집히지 않게 한다. 누군가 2홀 이상 밀려 있으면 비교하지 않음(null)
+    var even = true, common = [], maxPlayed = 0, cmp = {}, cmpLead = null, cmpLeaders = 0;
+    for (h = 0; h < round.holes; h++) {
+      var entered = 0;
+      active.forEach(function (r) { if (r.holes[h] !== null) entered++; });
+      if (entered && entered === active.length) common.push(h);
+      else if (entered) even = false;
+    }
+    active.forEach(function (r) {
+      if (r.played > maxPlayed) maxPlayed = r.played;
+      cmp[r.id] = common.reduce(function (a, hh) { return a + r.holes[hh] - round.pars[hh]; }, 0);
+      if (cmpLead === null || cmp[r.id] < cmpLead) cmpLead = cmp[r.id];
+    });
+    active.forEach(function (r) { if (cmp[r.id] === cmpLead) cmpLeaders++; });
+    var fair = active.length >= 2 && common.length >= 3 && maxPlayed - common.length <= 1;
     var players = rows.map(function (r) {
       return { id: r.id, name: r.name, team: r.team, played: r.played, gross: r.gross, toPar: r.toPar, rank: r.rank,
-        tied: r.rank !== null && rankCount[r.rank] > 1, gap: r.played ? r.toPar - lead : null, remaining: round.holes - r.played };
+        tied: r.rank !== null && rankCount[r.rank] > 1, gap: r.played ? r.toPar - lead : null, remaining: round.holes - r.played,
+        cmpGap: fair && r.played ? cmp[r.id] - cmpLead : null, cmpTied: cmpLeaders > 1 };
     });
     // 최근 3홀 흐름이 가장 좋은 사람 (3홀 이상 친 사람이 2명 이상이고 단독일 때만)
     var hot = null, cands = [];
@@ -170,8 +191,8 @@
     }
     if (nHoles < 3 || (hard && easy && hard.avg === easy.avg)) { hard = null; easy = null; }
     return {
-      order: ord.order, startBack: ord.startBack, stats: stats, players: players, active: active.length,
-      thruAll: thruAll, finished: round.status === 'finished' || thruAll === round.holes,
+      order: ord.order, startBack: ord.startBack, stats: stats, players: players, active: active.length, even: even,
+      thruAll: thruAll, finished: round.status === 'finished' || thruAll === round.holes || !!(opts && opts.archived),
       hot: hot, hardest: hard, easiest: easy
     };
   }
@@ -187,6 +208,7 @@
     var me = null;
     status.players.forEach(function (p) { if (p.id === pid) me = p; });
     var fin = status.finished;
+    var over = fin || st.played >= round.holes; // 이 플레이어는 더 칠 홀이 없음 → '지금/방금/다음/남은' 류의 문구를 쓰지 않음
     var seed = st.played + hashStr(pid);
     function pick(arr) { return arr[seed % arr.length]; }
     if (st.played === 0) {
@@ -204,19 +226,25 @@
     var types = [3, 4, 5].filter(function (t) { return st.byPar[t].n >= 2; }).map(function (t) { return { t: t, avg: st.byPar[t].toPar / st.byPar[t].n }; });
     types.sort(function (a, b) { return a.avg - b.avg; });
     var n1 = st.nines ? st.nines[0] : null, n2 = st.nines ? st.nines[1] : null;
-    var avg1 = n1 && n1.n ? n1.toPar / n1.n : null, avg2 = n2 && n2.n >= 3 ? n2.toPar / n2.n : null;
+    // 전·후반 비교는 전반 기록이 절반 넘게 있을 때만 (8~9번홀부터 기록을 시작한 사람에게 1~2홀로 추세를 말하지 않도록)
+    var avg1 = n1 && n1.n >= 5 ? n1.toPar / n1.n : null, avg2 = n2 && n2.n >= 3 ? n2.toPar / n2.n : null;
 
     // ── 격려
-    if (!fin && last.diff <= -2) cheer(110, no + '번홀 이글! 🦅 오늘의 한 방이에요.');
-    else if (!fin && last.diff === -1) cheer(100, no + '번홀 버디! 🎉 그 리듬 그대로 가요.');
-    if (!fin && prev && prev.diff >= 2 && last.diff <= 0) cheer(95, (prev.h + 1) + '번홀 실수 뒤에 바로 ' + G.toParLabel(last.diff) + '로 만회했어요. 멘탈이 좋아요!');
-    if (!fin && st.streakNow >= 3) cheer(90, '최근 ' + st.streakNow + '홀 연속 파 이하! 흐름이 아주 좋아요.');
-    else if (!fin && st.streakNow === 2) cheer(60, '두 홀 연속 파 이하, 감이 올라오고 있어요.');
-    if (!fin && round.extras && round.extras[last.h] && round.extras[last.h].nearest === pid) cheer(85, no + '번홀 니어리스트! 아이언 샷이 날카로워요.');
+    if (!over && last.diff <= -2) cheer(110, no + '번홀 이글! 🦅 오늘의 한 방이에요.');
+    else if (!over && last.diff === -1) cheer(100, no + '번홀 버디! 🎉 그 리듬 그대로 가요.');
+    if (!over && prev && prev.diff >= 2 && last.diff <= 0) cheer(95, (prev.h + 1) + '번홀 실수 뒤에 바로 ' + G.toParLabel(last.diff) + '로 만회했어요. 멘탈이 좋아요!');
+    if (!over && st.streakNow >= 3) cheer(90, '최근 ' + st.streakNow + '홀 연속 파 이하! 흐름이 아주 좋아요.');
+    else if (!over && st.streakNow === 2) cheer(60, '두 홀 연속 파 이하, 감이 올라오고 있어요.');
+    if (!over && round.extras && round.extras[last.h] && round.extras[last.h].nearest === pid) cheer(85, no + '번홀 니어리스트! 아이언 샷이 날카로워요.');
     if (me && status.active >= 2 && st.played >= 3) {
-      if (me.rank === 1 && !me.tied) cheer(80, fin ? '오늘의 1위! 축하해요 🏆' : '지금 단독 선두예요. 욕심내지 말고 하던 대로만 가요.');
-      else if (me.rank === 1) cheer(75, fin ? '공동 1위로 마쳤어요. 멋진 라운드였어요!' : '공동 선두예요. 한 홀 한 홀 집중하면 됩니다.');
-      else if (!fin && me.gap >= 1 && me.gap <= 3 && me.remaining >= me.gap) cheer(70, '선두와 ' + me.gap + '타 차, 남은 ' + me.remaining + '홀이면 충분히 뒤집을 수 있어요.');
+      if (fin) { // 최종 순위는 모두 같은 홀을 입력했을 때만 말한다 (9홀만 입력된 사람이 1위가 되지 않게)
+        if (status.even && me.rank === 1) cheer(me.tied ? 75 : 80, me.tied ? '공동 1위로 마쳤어요. 멋진 라운드였어요!' : '오늘의 1위! 축하해요 🏆');
+      } else if (!over && me.cmpGap !== null) { // 진행 중: 모두가 입력한 홀까지만 비교
+        if (me.cmpGap === 0 && !me.cmpTied) cheer(80, '지금 단독 선두예요. 욕심내지 말고 하던 대로만 가요.');
+        else if (me.cmpGap === 0) cheer(75, '공동 선두예요. 한 홀 한 홀 집중하면 됩니다.');
+        else if (me.cmpGap <= 3 && me.remaining >= me.cmpGap) cheer(70, '선두와 ' + me.cmpGap + '타 차, 남은 ' + me.remaining +
+          (me.remaining >= me.cmpGap + 2 ? '홀이면 충분히 뒤집을 수 있어요.' : '홀까지 포기하지 마세요. 아직 기회는 있어요.')); // 여유가 없을 때는 '충분히'라고 하지 않는다
+      }
     }
     if (st.dist.birdie >= 2) cheer(58, '오늘 버디가 ' + st.dist.birdie + '개! 공격적인 플레이가 통하고 있어요.');
     if (avg1 !== null && avg2 !== null && avg2 <= avg1 - 0.3) cheer(65, '후반 들어 홀당 ' + fmt1(avg1 - avg2) + '타씩 좋아졌어요.');
@@ -226,20 +254,22 @@
     if (st.putts.holes >= 4 && ptAvg <= 1.8) cheer(50, '퍼트가 홀당 ' + fmt1(ptAvg) + '개, 그린 위에서 든든해요.');
     if (st.fw.chances >= 4 && st.fw.hit / st.fw.chances >= 0.6) cheer(45, '페어웨이 안착 ' + st.fw.hit + '/' + st.fw.chances + ', 티샷이 안정적이에요.');
     if (st.bounce.made >= 2) cheer(48, '큰 실수 뒤에 ' + st.bounce.made + '번이나 바로 만회했어요. 회복력이 좋아요.');
-    if (!fin && (slump || st.toPar / st.played >= 2)) cheer(40, '스코어는 잠시 잊어요. 다음 한 샷만 잘 치면 흐름은 금방 바뀝니다.');
-    if (fin) cheer(20, '수고하셨어요! 오늘 기록을 다음 라운드의 목표로 삼아 보세요.');
-    cheer(10, pick(['좋은 페이스예요. 한 홀씩 차분하게 가요.', '지금처럼 한 샷 한 샷 집중하면 됩니다.', '스윙 리듬 괜찮아요. 끝까지 같은 템포로!']));
+    if (!over && (slump || st.toPar / st.played >= 2)) cheer(40, '스코어는 잠시 잊어요. 다음 한 샷만 잘 치면 흐름은 금방 바뀝니다.');
+    if (over) cheer(20, '수고하셨어요! 오늘 기록을 다음 라운드의 목표로 삼아 보세요.');
+    // 다른 격려가 하나도 없을 때만 쓰는 기본 문구. 격려는 항상 한 줄 이상이어야 한다(아래에서 c[0]을 읽음)
+    if (!cheers.length) cheer(10, last.diff >= 2 ? '괜찮아요, 누구나 그런 홀이 있어요. 다음 홀부터 다시 차분하게 가요.'
+      : pick(['좋은 페이스예요. 한 홀씩 차분하게 가요.', '지금처럼 한 샷 한 샷 집중하면 됩니다.', '스윙 리듬 괜찮아요. 끝까지 같은 템포로!']));
 
     // ── 팁
     var lastOb = stat(round, pid, last.h, 'ob'), lastHz = stat(round, pid, last.h, 'hz');
-    if (!fin && last.diff >= 3) tip(100, no + '번홀은 잊어요. 다음 티샷은 평소 루틴대로, 스윙은 80%만.');
-    if (!fin && lastOb) tip(98, '방금 OB가 나왔어요. 다음 티샷은 넓은 쪽을 겨냥하고, 좁은 홀이면 우드나 유틸리티도 좋아요.');
-    if (!fin && lastHz) tip(90, '방금 해저드는 잊고, 다음 샷은 안전한 쪽으로 넉넉하게 겨냥하세요.');
+    if (!over && last.diff >= 3) tip(100, no + '번홀은 잊어요. 다음 티샷은 평소 루틴대로, 스윙은 80%만.');
+    if (!over && lastOb) tip(98, '방금 OB가 나왔어요. 다음 티샷은 넓은 쪽을 겨냥하고, 좁은 홀이면 우드나 유틸리티도 좋아요.');
+    if (!over && lastHz) tip(90, '방금 해저드는 잊고, 다음 샷은 안전한 쪽으로 넉넉하게 겨냥하세요.');
     if (st.ob >= 2) tip(88, 'OB가 ' + st.ob + '번 나와 약 ' + (st.ob * OB_COST) + '타를 잃었어요. 좁은 홀에서는 드라이버를 내려놓고 페어웨이를 먼저 지키세요.');
     else if (st.ob === 1 && !lastOb) tip(40, 'OB 1번으로 약 ' + OB_COST + '타 손실. 위험한 쪽만 피해서 겨냥해도 충분해요.');
     if (st.putts.three >= 2) tip(85, '3퍼트가 ' + st.putts.three + '번 나왔어요. 첫 퍼트는 넣으려 하기보다 홀 1m 안에 붙이는 거리감에 집중해 보세요.');
     else if (st.putts.holes >= 4 && ptAvg >= 2.3) tip(60, '퍼트가 홀당 ' + fmt1(ptAvg) + '개예요. 어프로치를 핀보다 그린 중앙으로 보내면 긴 퍼트가 줄어듭니다.');
-    if (!fin && slump) tip(82, '최근 3홀이 힘들었어요. 물 한 모금 마시고 스윙 템포를 한 박자 늦춰 보세요.');
+    if (!over && slump) tip(82, '최근 3홀이 힘들었어요. 물 한 모금 마시고 스윙 템포를 한 박자 늦춰 보세요.');
     if (st.hz >= 2) tip(80, '해저드에 ' + st.hz + '번 들어갔어요. 물 앞에서는 한 클럽 길게 잡거나, 과감히 끊어 가는 쪽이 타수를 아낍니다.');
     if (st.doubles >= 2) tip(75, '더블보기 이상이 ' + st.doubles + '홀이에요. 이 홀들을 보기로만 막았어도 ' + st.lostToDoubles + '타를 줄였어요. 위기에서는 무리하지 말고 \'보기 작전\'으로.');
     var missSide = teeMissSide(st);
@@ -255,7 +285,7 @@
           : '파4에서 평균 ' + fmtAvg(worst.avg) + '. 세컨드 샷이 편한 위치로 티샷을 보내는 것부터 생각해 보세요.');
       }
     }
-    if (!fin && me && me.rank === 1 && status.active >= 2 && me.remaining >= 1 && me.remaining <= 6 && st.played >= 3) tip(50, '선두일수록 안전하게. 어려운 핀은 피하고 그린 중앙을 보세요.');
+    if (!over && me && me.cmpGap === 0 && me.remaining >= 1 && me.remaining <= 6 && st.played >= 3) tip(50, '선두일수록 안전하게. 어려운 핀은 피하고 그린 중앙을 보세요.');
     if (st.detailHoles === 0 && st.played >= 3) tip(15, 'OB·해저드·퍼트 수를 함께 기록하면 더 정확한 팁을 드릴 수 있어요.');
     tip(10, pick(['티샷 전에 목표 지점 하나만 정하고, 결과보다 루틴에 집중해 보세요.', '그린 주변에서는 굴릴 수 있으면 굴리는 쪽이 실수가 적어요.', '애매한 거리에서는 한 클럽 길게 잡고 부드럽게 치는 편이 좋아요.']));
 
@@ -270,7 +300,7 @@
   }
 
   // ───────────────────────── 코스 정보 → 홀 공략 ─────────────────────────
-  /** 위험 요소 비트 (sync.js의 hi:<h>:haz 와 같은 정의) */
+  /** 위험 요소 비트. 라운드에는 holeInfo[h].haz 비트마스크로 저장하고, 공유할 때는 비트마다 따로 보낸다(sync.js의 hi:<h>:z<비트>) */
   var HAZ = { OB_L: 1, OB_R: 2, WATER_L: 4, WATER_R: 8, WATER_FRONT: 16, BUNKER_L: 32, BUNKER_R: 64, BUNKER_GREEN: 128 };
   var HAZ_LABELS = [[1, 'OB 좌'], [2, 'OB 우'], [4, '해저드 좌'], [8, '해저드 우'], [16, '그린 앞 해저드'], [32, '벙커 좌'], [64, '벙커 우'], [128, '그린 주변 벙커']];
   var SHAPE_LABELS = { S: '직선', L: '좌 도그렉', R: '우 도그렉' };
@@ -297,27 +327,56 @@
   }
   /**
    * 입력된 코스 정보(와 오늘의 내 기록)로 만드는 홀 공략 팁. 정보가 없으면 빈 배열.
-   * pid를 주면 그 플레이어의 오늘 기록을 반영한 한 줄이 추가된다.
+   * pid를 주면 그 플레이어의 오늘 기록(이 홀은 제외)을 반영한 한 줄이 추가된다.
+   * 이 홀의 기록을 빼는 이유: 이 홀 점수를 입력하는 동안 팁이 생겼다 사라지면 화면이 밀려 다른 사람 칸을 누르게 된다.
    */
-  function holeTips(round, h, pid, status) {
+  function holeTips(round, h, pid) {
     var i = holeInfo(round, h), par = round.pars[h], tips = [];
     if (!(i.dist || i.shape || i.haz)) return tips;
     var obL = !!(i.haz & HAZ.OB_L), obR = !!(i.haz & HAZ.OB_R), wL = !!(i.haz & HAZ.WATER_L), wR = !!(i.haz & HAZ.WATER_R);
     var dangerL = obL || wL, dangerR = obR || wR;
-    function what(ob, w) { return ob && w ? 'OB와 해저드' : ob ? 'OB' : '해저드'; }
-    // 티샷 방향
-    if (dangerL && dangerR) tips.push('양쪽이 모두 위험한 좁은 홀이에요. 거리 욕심을 버리고 우드나 유틸리티로 페어웨이를 먼저 지키세요.');
-    else if (dangerL) tips.push('왼쪽이 ' + what(obL, wL) + '예요. 티샷은 페어웨이 오른쪽 절반을 겨냥하세요.');
-    else if (dangerR) tips.push('오른쪽이 ' + what(obR, wR) + '예요. 티샷은 페어웨이 왼쪽 절반을 겨냥하세요.');
-    if (i.shape === 'L') tips.push(dangerR ? '왼쪽으로 휘는 홀이에요. 코너를 가로지르려 하지 말고 페어웨이 가운데로 보내세요.' : '왼쪽으로 휘는 홀이에요. 티샷을 페어웨이 오른쪽으로 보내면 다음 샷의 시야가 열려요.');
-    else if (i.shape === 'R') tips.push(dangerL ? '오른쪽으로 휘는 홀이에요. 코너를 가로지르려 하지 말고 페어웨이 가운데로 보내세요.' : '오른쪽으로 휘는 홀이에요. 티샷을 페어웨이 왼쪽으로 보내면 다음 샷의 시야가 열려요.');
     var bL = !!(i.haz & HAZ.BUNKER_L), bR = !!(i.haz & HAZ.BUNKER_R);
-    if (bL && bR) tips.push('페어웨이 양쪽에 벙커가 있어요. 벙커에 못 미치는 클럽으로 끊어 가는 것도 방법이에요.');
-    else if (bL && !dangerR) tips.push('페어웨이 왼쪽 벙커를 피해 오른쪽으로 겨냥하세요.');
-    else if (bR && !dangerL) tips.push('페어웨이 오른쪽 벙커를 피해 왼쪽으로 겨냥하세요.');
+    function what(ob, w) { return ob && w ? 'OB와 해저드' : ob ? 'OB' : '해저드'; }
+    var par3 = par <= 3;        // 파3는 티샷이 곧 그린 공략이라 페어웨이·도그렉 문구를 쓰지 않는다
+    var outDanger = false;       // 도그렉 바깥쪽(시야가 열리는 쪽)이 OB·해저드인 홀
+    // 티샷 방향 — 좌/우/가운데를 가리키는 문장이 서로 엇갈리지 않게 한 가지 목표만 안내한다
+    if (par3) {
+      if (dangerL && dangerR) tips.push('그린 양쪽이 모두 위험해요. 핀을 직접 노리지 말고 그린 가운데를 겨냥하세요.');
+      else if (dangerL) tips.push('왼쪽이 ' + what(obL, wL) + '예요. 그린 가운데보다 오른쪽을 겨냥하세요.');
+      else if (dangerR) tips.push('오른쪽이 ' + what(obR, wR) + '예요. 그린 가운데보다 왼쪽을 겨냥하세요.');
+      else if (bL && bR) tips.push('그린 양쪽에 벙커가 있어요. 핀보다 그린 가운데를 겨냥하세요.');
+      else if (bL) tips.push('그린 왼쪽 벙커를 피해 가운데보다 오른쪽을 겨냥하세요.');
+      else if (bR) tips.push('그린 오른쪽 벙커를 피해 가운데보다 왼쪽을 겨냥하세요.');
+    } else {
+      var bend = i.shape === 'L' ? '왼쪽' : i.shape === 'R' ? '오른쪽' : '';   // 홀이 휘는 쪽 = 코너 안쪽
+      var outer = i.shape === 'L' ? '오른쪽' : '왼쪽';                          // 코너 바깥쪽 = 다음 샷의 시야가 열리는 쪽
+      var outBunker = !!bend && (i.shape === 'L' ? bR : bL);
+      var centre = bend + '으로 휘는 홀이에요. 코너를 가로지르려 하지 말고 페어웨이 가운데로 보내세요.';
+      outDanger = !!bend && (i.shape === 'L' ? dangerR : dangerL);
+      if (dangerL && dangerR) {
+        tips.push('양쪽이 모두 위험한 좁은 홀이에요. 거리 욕심을 버리고 우드나 유틸리티로 페어웨이를 먼저 지키세요.');
+        if (bend) tips.push(centre);
+      } else if (outDanger) {
+        tips.push(bend + '으로 휘는 홀인데 바깥쪽(' + outer + ')이 ' + (i.shape === 'L' ? what(obR, wR) : what(obL, wL)) + '예요. 코너를 가로지르려 하지 말고 페어웨이 가운데를 겨냥하세요.');
+      } else {
+        if (dangerL) tips.push('왼쪽이 ' + what(obL, wL) + '예요. 티샷은 페어웨이 오른쪽 절반을 겨냥하세요.');
+        else if (dangerR) tips.push('오른쪽이 ' + what(obR, wR) + '예요. 티샷은 페어웨이 왼쪽 절반을 겨냥하세요.');
+        if (bend) {
+          if (dangerL || dangerR || !outBunker) tips.push(bend + '으로 휘는 홀이에요. 티샷을 페어웨이 ' + outer + '으로 보내면 다음 샷의 시야가 열려요.');
+          else if (bL && bR) tips.push(centre);
+          else tips.push(bend + '으로 휘는 홀인데 바깥쪽(' + outer + ')에 벙커가 있어요. 페어웨이 가운데를 겨냥하고, 벙커에 못 미치는 클럽으로 끊어 가는 것도 방법이에요.');
+        }
+      }
+      if (bL && bR) tips.push('페어웨이 양쪽에 벙커가 있어요. 벙커에 못 미치는 클럽으로 끊어 가는 것도 방법이에요.');
+      else if (!outDanger && !outBunker) {   // 바깥쪽이 막힌 도그렉은 위에서 이미 '가운데'로 안내했다
+        if (bL && !dangerR) tips.push('페어웨이 왼쪽 벙커를 피해 오른쪽으로 겨냥하세요.');
+        else if (bR && !dangerL) tips.push('페어웨이 오른쪽 벙커를 피해 왼쪽으로 겨냥하세요.');
+      }
+    }
+    var aimed = par3 && tips.length > 0;   // 파3에서 이미 겨냥할 곳을 안내했으면 같은 샷에 대한 문장을 더 붙이지 않는다
     // 그린 공략
-    if (i.haz & HAZ.WATER_FRONT) tips.push('그린 앞에 해저드가 있어요. 한 클럽 길게 잡고, 거리가 애매하면 끊어 가세요.');
-    if (i.haz & HAZ.BUNKER_GREEN) tips.push('그린 주변에 벙커가 있어요. 핀보다 그린 가운데를 겨냥하세요.');
+    if (i.haz & HAZ.WATER_FRONT) tips.push(par3 ? '그린 앞에 해저드가 있어요. 짧으면 물이니 한 클럽 길게 잡으세요.' : '그린 앞에 해저드가 있어요. 한 클럽 길게 잡고, 거리가 애매하면 끊어 가세요.');
+    if ((i.haz & HAZ.BUNKER_GREEN) && !aimed) tips.push('그린 주변에 벙커가 있어요. 핀보다 그린 가운데를 겨냥하세요.');
     // 거리
     if (i.dist) {
       if (par <= 3) {
@@ -332,14 +391,14 @@
       }
     }
     // 오늘의 내 기록을 반영한 한 줄
-    if (pid) {
-      status = status || roundStatus(round);
-      var st = status.stats[pid];
-      if (st && st.played) {
+    if (pid && G.playerById(round, pid)) {
+      var st = playerStats(round, pid, null, h);
+      if (st.played) {
         var bp = st.byPar[parKey(par)];
         var side = teeMissSide(st);
-        if (side === 'R' && dangerR && !dangerL) tips.unshift('오늘 티샷이 오른쪽으로 자주 빗나갔는데 이 홀은 오른쪽이 위험해요. 왼쪽을 넉넉히 보고 치세요.');
-        else if (side === 'L' && dangerL && !dangerR) tips.unshift('오늘 티샷이 왼쪽으로 자주 빗나갔는데 이 홀은 왼쪽이 위험해요. 오른쪽을 넉넉히 보고 치세요.');
+        var steady = '거리보다 방향이 먼저예요. 가장 자신 있는 클럽을 잡으세요.';   // 바깥쪽이 위험한 도그렉에서는 '가운데' 안내와 엇갈리지 않게 방향을 말하지 않는다
+        if (side === 'R' && dangerR && !dangerL) tips.unshift('오늘 티샷이 오른쪽으로 자주 빗나갔는데 이 홀은 오른쪽이 위험해요. ' + (outDanger ? steady : '왼쪽을 넉넉히 보고 치세요.'));
+        else if (side === 'L' && dangerL && !dangerR) tips.unshift('오늘 티샷이 왼쪽으로 자주 빗나갔는데 이 홀은 왼쪽이 위험해요. ' + (outDanger ? steady : '오른쪽을 넉넉히 보고 치세요.'));
         else if (st.ob >= 2 && (obL || obR)) tips.unshift('오늘 OB가 ' + st.ob + '번 나왔어요. 이 홀도 OB가 있으니 티샷은 가장 자신 있는 클럽으로.');
         else if (st.hz >= 2 && (wL || wR || (i.haz & HAZ.WATER_FRONT))) tips.unshift('오늘 해저드에 ' + st.hz + '번 들어갔어요. 이 홀의 물은 넉넉하게 피해서 겨냥하세요.');
         else if (bp.n >= 2 && bp.toPar / bp.n >= 1.5) tips.push('오늘 파' + parKey(par) + '에서 평균 ' + fmtAvg(bp.toPar / bp.n) + '예요. 이 홀은 무리하지 말고 보기로 막는 작전이 좋아요.');

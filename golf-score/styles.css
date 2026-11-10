@@ -73,7 +73,7 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 .inline-num { display: inline-flex; align-items: center; gap: 6px; }
 .inline-num input { width: 110px; text-align: right; }
 .seg { display: inline-flex; background: #eef2ef; border-radius: 10px; padding: 3px; gap: 2px; }
-.seg button { border: 0; background: transparent; border-radius: 8px; padding: 8px 12px; font-weight: 600; font-size: 14px; color: var(--muted); min-height: 36px; }
+.seg button { border: 0; background: transparent; border-radius: 8px; padding: 8px 12px; font-weight: 600; font-size: 14px; color: var(--muted); min-height: 36px; white-space: nowrap; }
 .seg button.active { background: #fff; color: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 .seg.wide { display: flex; } .seg.wide button { flex: 1; }
 .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; min-height: 32px; }
@@ -123,7 +123,12 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 .scorerow:first-of-type { border-top: 0; }
 .scorerow .who { min-width: 0; }
 .scorerow .name { font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
-.scorerow .meta { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* 점수 줄의 높이는 내용과 상관없이 같아야 한다 (높이가 변하면 아래 줄의 ＋/− 버튼이 손가락 밑에서 밀린다):
+   누적 타수 줄은 한 줄로 고정하고, OB·해저드·3퍼트 표시는 그 아래 여백에 겹쳐 그린다 */
+.scorerow .who { position: relative; }
+.scorerow .meta { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; height: 18px; }
+.scorerow .meta > * { flex: 0 0 auto; }
+.scorerow .tags { position: absolute; left: 0; right: 0; top: 100%; height: 14px; display: flex; gap: 4px; overflow: hidden; white-space: nowrap; }
 .scorerow .meta .tp { font-weight: 700; }
 .scorerow .dots { color: var(--primary); letter-spacing: 1px; }
 .pm { border: 0; border-radius: 12px; width: 52px; height: 52px; font-size: 26px; font-weight: 700; background: #eef2ef; color: var(--primary-dark); }
@@ -273,19 +278,32 @@ details.adv[open] summary::before { content: '▾ '; }
 .kv .k { white-space: nowrap; }
 
 /* ── 코스 정보: 약도 · 공략 · 입력 ── */
-.course { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+.card.course { padding-top: 8px; padding-bottom: 10px; scroll-margin-top: 64px; }
+/* 홀 카드 맨 아래의 코스 요약 줄: 내용과 상관없이 높이가 같다 */
+.course-sum { display: flex; align-items: center; gap: 8px; width: 100%; height: 48px; margin-top: 4px; padding: 0 2px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; }
+.course-sum .txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.course-sum .l1, .course-sum .l2 { display: block; height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.course-sum .l1 { font-size: 14px; font-weight: 700; }
+.course-sum .l1.none { font-weight: 600; color: var(--muted); }
+.course-sum .l2 { font-size: 12px; color: var(--muted); }
+.course-sum .go { color: var(--muted); font-size: 18px; flex: 0 0 auto; }
 .course-head .sumtxt { flex: 1 1 auto; min-width: 0; }
 .course-notes { padding: 2px 0 4px; }
 .course-view { display: flex; gap: 12px; align-items: flex-start; padding: 4px 0 8px; }
 .holemap { width: 108px; flex: 0 0 auto; border-radius: 10px; }
+/* 입력 중(펼친 상태): 공략 글을 약도 높이(108×171px)에 맞춰 고정 → 팁이 늘어도 아래 입력란 위치가 변하지 않는다 */
+.course-view.fixed { height: 179px; }
+.course-view.fixed > .stack { max-height: 171px; overflow-y: auto; min-width: 0; }
 .holemap .ob { font-size: 6.5px; font-weight: 800; fill: #e34948; text-anchor: middle; dominant-baseline: middle; }
 .holemap .cap { font-size: 9px; font-weight: 700; fill: #16211b; text-anchor: middle; }
 .course-edit { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 2px; }
 .course-edit input.short { width: 96px; }
 .row.top { align-items: flex-start; }
+.course-edit .row.top { flex-wrap: wrap; } /* 좁은 화면에서는 홀 형태 선택이 거리 아래 줄로 내려간다 (버튼 글자가 꺾이지 않게) */
 a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; color: inherit; }
 .detail-head .ttl { flex: 0 0 auto; white-space: nowrap; }
-.scorerow .meta .tag { background: #eef2ef; color: var(--text); border-radius: 6px; padding: 0 5px; font-weight: 700; font-size: 11px; line-height: 17px; }
+.scorerow .tags .tag { flex: 0 0 auto; background: #eef2ef; color: var(--text); border-radius: 5px; padding: 0 4px; font-weight: 700; font-size: 10px; line-height: 13px; height: 13px; }
+.scorerow.mine .tags .tag { background: #fff; }
 /* 코스에서 한 손으로 누르는 칩: 높이 36px 이상 */
 .chip.tap { min-height: 36px; padding: 6px 11px; font-size: 14px; }
 .chip.tap.num { min-width: 42px; padding: 6px 8px; }

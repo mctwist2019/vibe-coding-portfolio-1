@@ -42,8 +42,13 @@
    * 홀별 코스 정보(선택 입력): round.holeInfo[hole] = { dist: 거리(1~999), shape: 'S' 직선 | 'L' 좌 도그렉 | 'R' 우 도그렉,
    *   haz: 위험 요소 비트(1 OB좌, 2 OB우, 4 해저드좌, 8 해저드우, 16 그린 앞 해저드, 32 벙커좌, 64 벙커우, 128 그린 주변 벙커), memo: 공략 메모 }
    * 코스 이름은 round.course
+   * 위험 요소는 라운드 안에서는 비트마스크(haz) 하나지만 공유할 때는 비트마다 따로 보낸다: hi:<홀>:z<비트> = 1 | null.
+   * 마스크를 한 키에 실으면 같은 홀의 서로 다른 위험 요소를 두 기기가 따로 표시했을 때 늦게 쓴 쪽이 다른 쪽 입력을 지운다.
    */
-  var HOLE_FIELDS = ['dist', 'shape', 'haz', 'memo'];
+  var HOLE_FIELDS = ['dist', 'shape', 'memo'];
+  var HAZ_BITS = [1, 2, 4, 8, 16, 32, 64, 128];
+  function hazBit(f) { var m = /^z(\d{1,3})$/.exec(f), b = m ? +m[1] : 0; return HAZ_BITS.indexOf(b) >= 0 ? b : 0; }
+  function hazMask(info) { var m = info ? info.haz : 0; return typeof m === 'number' && isFinite(m) && m > 0 ? m & 255 : 0; }
   var MEMO_MAX = 200, COURSE_MAX = 40;
   var PRESENCE_INTERVAL = 25000;
   var PRESENCE_TTL = 75000;
@@ -153,8 +158,9 @@
       case 'name': return round.name == null ? '' : round.name;
       case 'course': return round.course == null ? '' : String(round.course);
       case 'hi': {
-        var hi = round.holeInfo && round.holeInfo[+p[1]], hv = hi ? hi[p[2]] : null;
-        if (p[2] === 'dist' || p[2] === 'haz') return typeof hv === 'number' && isFinite(hv) && hv > 0 ? hv : null; // 정수화는 setKey에서
+        var hi = round.holeInfo && round.holeInfo[+p[1]], hv = hi ? hi[p[2]] : null, gb = hazBit(p[2]);
+        if (gb) return hazMask(hi) & gb ? 1 : null;
+        if (p[2] === 'dist') return typeof hv === 'number' && isFinite(hv) && hv > 0 ? hv : null; // 정수화는 setKey에서
         return typeof hv === 'string' && hv ? hv : null;
       }
       case 'status': return round.status || 'live';
@@ -179,18 +185,23 @@
       case 'course': round.course = cleanStr(v, COURSE_MAX); return true;
       case 'hi': {
         h = +p[1];
-        if (!(h >= 0 && h < round.holes) || HOLE_FIELDS.indexOf(p[2]) < 0) return false;
+        var zb = hazBit(p[2]), hf = zb ? 'haz' : p[2];
+        if (!(h >= 0 && h < round.holes) || (!zb && HOLE_FIELDS.indexOf(hf) < 0)) return false;
         var iv = null;
-        if (!(v === null || v === undefined || v === '')) {
-          if (p[2] === 'dist') { iv = clampInt(v, 0, 999); if (iv === null) return false; }
-          else if (p[2] === 'haz') { iv = clampInt(v, 0, 255); if (iv === null) return false; }
-          else if (p[2] === 'shape') { if (v !== 'S' && v !== 'L' && v !== 'R') return false; iv = v; }
+        if (zb) { // 위험 요소 한 비트만 켜거나 끈다 (나머지 비트는 그대로)
+          var on = v === 1 || v === true;
+          if (!on && !(v === null || v === undefined || v === '' || v === 0 || v === false)) return false;
+          var cm = hazMask(round.holeInfo && round.holeInfo[h]);
+          iv = (on ? cm | zb : cm & ~zb) || null;
+        } else if (!(v === null || v === undefined || v === '')) {
+          if (hf === 'dist') { iv = clampInt(v, 0, 999); if (iv === null) return false; }
+          else if (hf === 'shape') { if (v !== 'S' && v !== 'L' && v !== 'R') return false; iv = v; }
           else iv = cleanStr(String(v).replace(/[\r\n\t]+/g, ' '), MEMO_MAX).trim();
           if (iv === 0 || iv === '') iv = null; // 0과 빈 문자열은 '정보 없음'과 같은 값으로 저장
         }
         round.holeInfo = round.holeInfo || {};
         var info = round.holeInfo[h] || {};
-        if (iv === null) delete info[p[2]]; else info[p[2]] = iv;
+        if (iv === null) delete info[hf]; else info[hf] = iv;
         if (Object.keys(info).length) round.holeInfo[h] = info; else delete round.holeInfo[h];
         return true;
       }
@@ -277,6 +288,11 @@
         var hk = 'hi:' + h + ':' + HOLE_FIELDS[m];
         if ((info && info[HOLE_FIELDS[m]] != null) || rev[hk]) keys.push(hk);
       }
+      var hm = hazMask(info);
+      for (var z = 0; z < HAZ_BITS.length; z++) {
+        var zk = 'hi:' + h + ':z' + HAZ_BITS[z];
+        if ((hm & HAZ_BITS[z]) || rev[zk]) keys.push(zk); // rev가 남아 있으면 지운 것도 전달(tombstone)
+      }
     }
     (round.players || []).forEach(function (p) {
       var ps = round.stats && round.stats[p.id];
@@ -351,7 +367,7 @@
     return String(inc.by || '') > String(loc.by || '');
   }
   // 홀 번호는 앞자리 0 없는 표기만 허용: 'score:a:07'이 'score:a:7'과 같은 칸을 다른 rev 키로 덮어쓰지 못하게 함
-  var KEY_RE = /^(meta|name|status|course|hi:(0|[1-9]\d?):(dist|shape|haz|memo)|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(ob|hz|bk|pt|fw))$/;
+  var KEY_RE = /^(meta|name|status|course|hi:(0|[1-9]\d?):(dist|shape|memo|z(1|2|4|8|16|32|64|128))|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(ob|hz|bk|pt|fw))$/;
 
   /**
    * 들어온 키들을 LWW로 병합. 반환: {changed:[키], localNewer:bool, maxTs}
@@ -771,7 +787,7 @@
   }
 
   return {
-    ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
+    ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, HAZ_BITS: HAZ_BITS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,
     createClock: createClock, maxRevTs: maxRevTs, cleanPid: cleanPid, isReservedPid: isReservedPid,

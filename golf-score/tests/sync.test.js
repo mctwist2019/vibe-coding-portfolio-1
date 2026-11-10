@@ -367,14 +367,49 @@ test('course name and hole info sync, are canonicalized locally, and old rounds 
   assert.equal(joiner.course, a.course);
   const res = S.merge(b, {
     'hi:0:shape': { v: 'X', ts: 9e3, by: 'x' }, 'hi:99:dist': { v: 5, ts: 9e3, by: 'x' }, 'hi:1:bogus': { v: 1, ts: 9e3, by: 'x' },
-    'hi:1:haz': { v: 9999, ts: 9e3, by: 'x' }, 'hi:1:memo': { v: '<b>x</b>'.repeat(100), ts: 9e3, by: 'x' }, 'course': { v: 'x'.repeat(99), ts: 9e3, by: 'x' }
+    'hi:1:haz': { v: 9999, ts: 9e3, by: 'x' }, 'hi:1:z128': { v: true, ts: 9e3, by: 'x' }, 'hi:1:z3': { v: 1, ts: 9e3, by: 'x' }, 'hi:1:z256': { v: 1, ts: 9e3, by: 'x' }, 'hi:1:z8': { v: 7, ts: 9e3, by: 'x' },
+    'hi:1:memo': { v: '<b>x</b>'.repeat(100), ts: 9e3, by: 'x' }, 'course': { v: 'x'.repeat(99), ts: 9e3, by: 'x' }
   });
-  assert.deepEqual(res.changed.sort(), ['course', 'hi:1:haz', 'hi:1:memo']);
-  assert.equal(b.holeInfo[1].haz, 255);
+  assert.deepEqual(res.changed.sort(), ['course', 'hi:1:memo', 'hi:1:z128'], 'whole-mask key, unknown bits and non-boolean values are rejected');
+  assert.equal(b.holeInfo[1].haz, 128);
   assert.equal(b.holeInfo[1].memo.length, S.MEMO_MAX);
   assert.equal(b.course.length, S.COURSE_MAX);
   assert.equal(b.holeInfo[0].shape, 'L', 'invalid shape rejected');
   // 형태를 지우면 tombstone
   S.setKey(b, 'hi:0:shape', null);
   assert.equal(b.holeInfo[0].shape, undefined);
+});
+
+test('hazard flags sync one key per flag: concurrent toggles of different flags never erase each other', () => {
+  const mkr = () => { const r = mkRound(); r.holeInfo = { 2: { haz: 17 } }; S.stampAll(r, 1000, 'H'); return r; };
+  const a = mkr(), b = mkr();
+  assert.deepEqual(Object.keys(S.exportKeys(a)).filter((k) => /^hi:/.test(k)).sort(), ['hi:2:z1', 'hi:2:z16'], 'mask is projected as one key per set flag');
+  assert.equal(S.roundFromSnapshot(S.exportKeys(a), defaults).holeInfo[2].haz, 17);
+  const ca = S.createClock(() => 5000), cb = S.createClock(() => 5400);
+  let baseA = S.project(a), baseB = S.project(b);
+  // A: 5번홀 'OB 좌', B: 같은 홀 '해저드 우' (서로의 입력을 아직 못 받은 상태)
+  S.setKey(a, 'hi:4:z1', 1); const da = S.diffAndStamp(a, baseA, ca, 'A');
+  S.setKey(b, 'hi:4:z8', 1); const db = S.diffAndStamp(b, baseB, cb, 'B');
+  assert.deepEqual(da.changed, ['hi:4:z1']); assert.deepEqual(db.changed, ['hi:4:z8']);
+  const opsA = S.exportKeys(a, da.changed), opsB = S.exportKeys(b, db.changed);
+  S.merge(a, opsB); S.merge(b, opsA);
+  assert.equal(a.holeInfo[4].haz, 9); assert.equal(b.holeInfo[4].haz, 9);
+  assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
+  // A가 'OB 좌'를 지우는 동안 B가 '벙커 좌'를 추가: 지운 것이 되살아나지 않고 둘 다 반영
+  baseA = S.project(a); baseB = S.project(b);
+  S.setKey(a, 'hi:4:z1', null); const da2 = S.diffAndStamp(a, baseA, ca, 'A');
+  S.setKey(b, 'hi:4:z32', 1); const db2 = S.diffAndStamp(b, baseB, cb, 'B');
+  const opsA2 = S.exportKeys(a, da2.changed), opsB2 = S.exportKeys(b, db2.changed);
+  assert.equal(opsA2['hi:4:z1'].v, null, 'a cleared flag is sent as a tombstone');
+  S.merge(a, opsB2); S.merge(b, opsA2);
+  assert.equal(a.holeInfo[4].haz, 40); assert.equal(b.holeInfo[4].haz, 40);
+  assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
+  // 마지막 위험 요소를 지우면 빈 객체가 남지 않는다
+  S.setKey(a, 'hi:4:z8', 0); S.setKey(a, 'hi:4:z32', false);
+  assert.equal(a.holeInfo[4], undefined);
+  // 범위를 벗어난 로컬 마스크는 정규화된다
+  const c = mkRound(); S.stampAll(c, 1000, 'H'); const baseC = S.project(c);
+  c.holeInfo = { 0: { haz: 300 } };
+  S.diffAndStamp(c, baseC, S.createClock(() => 6000), 'C');
+  assert.equal(c.holeInfo[0].haz, 300 & 255);
 });

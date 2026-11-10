@@ -72,7 +72,13 @@ MQTT_URL=ws://localhost:1884/mqtt node --test tests/sync.transport.test.js   # m
 ### GitHub Pages 배포
 
 `.github/workflows/pages.yml`이 `main` 브랜치에 푸시될 때 테스트를 돌린 뒤 저장소 전체를 GitHub Pages로 배포합니다.
-저장소 Settings → Pages → Source를 **GitHub Actions**로 한 번만 설정하면 됩니다.
+처음 한 번만 저장소 설정을 아래 순서대로 맞춥니다. (워크플로우의 토큰으로는 Pages를 켤 수 없어 수동 설정이 필요합니다.)
+
+1. **Settings → General → Default branch**를 `main`으로 바꿉니다. Pages를 켤 때 GitHub가 `github-pages` 환경에 "기본 브랜치만 배포 가능" 규칙을 자동으로 붙이므로, 기본 브랜치가 `main`이 아니면 배포가 `Branch "main" is not allowed to deploy to github-pages` 오류로 막힙니다.
+2. **Settings → Pages → Build and deployment → Source**를 **GitHub Actions**로 선택합니다.
+3. **Actions → Deploy to GitHub Pages**에서 실패한 실행을 다시 돌리거나(Re-run), `main`에 푸시합니다.
+
+Pages를 먼저 켰다면 Settings → Environments → github-pages → Deployment branches and tags에 `main`을 추가하면 됩니다.
 배포 후 주소는 `https://<계정>.github.io/<저장소>/golf-score/` 입니다.
 
 ### 구조

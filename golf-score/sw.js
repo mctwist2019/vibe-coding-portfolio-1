@@ -11,6 +11,15 @@ self.addEventListener('activate', function (e) {
     return Promise.all(keys.filter(function (k) { return k.indexOf('golf-score-') === 0 && k !== CACHE; }).map(function (k) { return caches.delete(k); }));
   }).then(function () { return self.clients.claim(); }));
 });
+// 같은 origin의 다른 서비스 워커가 이 캐시를 지웠더라도 온라인 방문 시 프리캐시를 다시 채움 (install은 SW가 바뀔 때만 다시 돌기 때문)
+var precacheChecked = false;
+function ensurePrecache() {
+  if (precacheChecked) return;
+  precacheChecked = true;
+  caches.open(CACHE).then(function (c) {
+    return c.match('./index.html').then(function (hit) { if (!hit) return c.addAll(ASSETS); });
+  }).catch(function () { precacheChecked = false; });
+}
 self.addEventListener('fetch', function (e) {
   if (e.request.method !== 'GET') return;
   var isNav = e.request.mode === 'navigate';
@@ -19,6 +28,7 @@ self.addEventListener('fetch', function (e) {
       if (res && res.ok && res.type === 'basic') {
         var copy = res.clone();
         caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
+        if (isNav) ensurePrecache();
       }
       return res;
     }).catch(function () {

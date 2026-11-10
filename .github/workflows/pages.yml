@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false # 진행 중인 Pages 배포는 중단하지 않음 (중단되면 다음 배포가 막힐 수 있음)
 
 jobs:
   test:

@@ -36,7 +36,7 @@
    * 홀별 상세 기록(선택 입력): round.stats[pid][hole][field]
    *   ob/hz/bk = 횟수(1 이상만 저장, 0은 '기록 없음'), pt = 퍼트 수(0 = 칩인), fw = 티샷 결과 1 페어웨이 안착 / 2 왼쪽 / 3 오른쪽
    */
-  var STAT_FIELDS = { ob: { min: 1, max: 9 }, hz: { min: 1, max: 9 }, bk: { min: 1, max: 9 }, pt: { min: 0, max: 9 }, fw: { min: 1, max: 3 } };
+  var STAT_FIELDS = { sh: { min: 1, max: 15 }, ob: { min: 1, max: 9 }, hz: { min: 1, max: 9 }, bk: { min: 1, max: 9 }, pt: { min: 0, max: 9 }, fw: { min: 1, max: 3 } };
   var STAT_NAMES = Object.keys(STAT_FIELDS);
   /**
    * 홀별 코스 정보(선택 입력): round.holeInfo[hole] = { dist: 거리(1~999), shape: 'S' 직선 | 'L' 좌 도그렉 | 'R' 우 도그렉,
@@ -367,7 +367,7 @@
     return String(inc.by || '') > String(loc.by || '');
   }
   // 홀 번호는 앞자리 0 없는 표기만 허용: 'score:a:07'이 'score:a:7'과 같은 칸을 다른 rev 키로 덮어쓰지 못하게 함
-  var KEY_RE = /^(meta|name|status|course|hi:(0|[1-9]\d?):(dist|shape|memo|z(1|2|4|8|16|32|64|128))|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(ob|hz|bk|pt|fw))$/;
+  var KEY_RE = /^(meta|name|status|course|hi:(0|[1-9]\d?):(dist|shape|memo|z(1|2|4|8|16|32|64|128))|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(sh|ob|hz|bk|pt|fw))$/;
 
   /**
    * 들어온 키들을 LWW로 병합. 반환: {changed:[키], localNewer:bool, maxTs}

@@ -243,6 +243,10 @@ details.adv[open] summary::before { content: '▾ '; }
 .stp .lab { font-size: 13px; color: var(--muted); font-weight: 600; flex: 0 0 52px; }
 .stp .n { min-width: 20px; text-align: center; font-weight: 800; font-size: 17px; color: var(--muted); }
 .stp .n.on { color: var(--text); }
+.stp.wide > .small { margin-left: 4px; min-width: 0; }
+.sumline { grid-column: 1 / -1; font-size: 14px; padding: 6px 10px; border-radius: 10px; background: rgba(29, 107, 58, .08); }
+.sumline b { font-size: 16px; color: var(--primary-dark); }
+.sumline.muted { background: transparent; padding: 2px 0; font-size: 13px; }
 .mini { border: 0; border-radius: 10px; width: 40px; height: 36px; font-size: 20px; font-weight: 700; background: #eef2ef; color: var(--primary-dark); flex: 0 0 auto; }
 .detail.mine .mini { background: #fff; }
 .mini:disabled { opacity: .35; }
@@ -294,6 +298,20 @@ details.adv[open] summary::before { content: '▾ '; }
 .course-view { display: flex; gap: 12px; align-items: flex-start; padding: 4px 0 8px; }
 .course-view > .stack { min-width: 0; }
 .holemap { width: 108px; flex: 0 0 auto; border-radius: 10px; }
+/* 코스 안내도를 옮긴 약도 */
+.laybtn { flex: 0 0 auto; border: 0; padding: 0; background: none; position: relative; line-height: 0; border-radius: 10px; }
+.laymap { display: block; border-radius: 10px; }
+.laymap.big { width: 100%; height: auto; margin: 10px 0; }
+.laymap text { font-family: inherit; font-weight: 800; paint-order: stroke; stroke-linejoin: round; }
+.laymap .arc { font-size: 22px; fill: #fff; stroke: #2f6b45; stroke-width: 5px; text-anchor: middle; dominant-baseline: middle; }
+.laymap .cy { font-size: 21px; fill: #16211b; stroke: #fff; stroke-width: 5px; }
+.laymap .mk { font-size: 15px; fill: #16211b; stroke: #fff; stroke-width: 3.5px; opacity: .85; }
+.laybtn .zoomhint { position: absolute; left: 4px; bottom: 4px; font-size: 10px; line-height: 16px; padding: 0 5px; border-radius: 8px; background: rgba(255,255,255,.85); color: var(--text); font-weight: 700; }
+.mapzoom { position: fixed; inset: 0; z-index: 60; background: rgba(10, 20, 14, .6); overflow-y: auto; padding: calc(12px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom)); }
+.mapzoom-card { max-width: 440px; margin: 0 auto; background: var(--card); border-radius: 16px; padding: 12px; box-shadow: var(--shadow); }
+.teechips { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 2px 0 10px; font-size: 13px; }
+.teechip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.teechip i { width: 11px; height: 11px; border-radius: 50%; border: 1px solid #5b6b62; display: inline-block; }
 /* 입력 중(펼친 상태): 공략 글을 약도 높이(108×171px)에 맞춰 고정 → 팁이 늘어도 아래 입력란 위치가 변하지 않는다 */
 .course-view.fixed { height: 179px; }
 .course-view.fixed > .stack { max-height: 171px; overflow-y: auto; min-width: 0; }

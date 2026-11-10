@@ -413,3 +413,20 @@ test('hazard flags sync one key per flag: concurrent toggles of different flags 
   S.diffAndStamp(c, baseC, S.createClock(() => 6000), 'C');
   assert.equal(c.holeInfo[0].haz, 300 & 255);
 });
+
+test('shot count (st:<pid>:<h>:sh) syncs like the other detail stats', () => {
+  const a = mkRound(), b = S.roundFromSnapshot(S.exportKeys(mkRound()), defaults);
+  const clock = S.createClock(() => 7000), base = S.project(a);
+  S.setKey(a, 'st:a:2:sh', 3); S.setKey(a, 'st:a:2:pt', 2);
+  const d = S.diffAndStamp(a, base, clock, 'A');
+  assert.deepEqual(d.changed.sort(), ['st:a:2:pt', 'st:a:2:sh']);
+  S.merge(b, S.exportKeys(a, d.changed));
+  assert.deepEqual(b.stats.a[2], { sh: 3, pt: 2 });
+  // 범위: 1~15, 0은 '없음'
+  const res = S.merge(b, { 'st:a:3:sh': { v: 99, ts: 9e3, by: 'x' }, 'st:a:4:sh': { v: 0, ts: 9e3, by: 'x' }, 'st:a:5:sh': { v: 'x', ts: 9e3, by: 'x' } });
+  assert.equal(b.stats.a[3].sh, 15);
+  assert.equal(b.stats.a[4], undefined);
+  assert.ok(res.changed.indexOf('st:a:5:sh') < 0, 'garbage is rejected');
+  S.setKey(b, 'st:a:2:sh', null);
+  assert.deepEqual(b.stats.a[2], { pt: 2 });
+});

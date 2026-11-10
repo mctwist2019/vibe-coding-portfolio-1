@@ -5,6 +5,7 @@
   var S = window.GolfSync;
   var A = window.GolfAnalysis;
   var BUILTIN_COURSES = Array.isArray(window.GolfCourses) ? window.GolfCourses : [];
+  var COURSE_MAPS = (window.GolfCourseMaps && typeof window.GolfCourseMaps === 'object') ? window.GolfCourseMaps : {};
   var KEY = 'golfscore.v1';
   var TEAMS = ['A', 'B', 'C', 'D'];
   var GAME_NAMES = { stroke: '스트로크', stableford: '스테이블포드', skins: '스킨스', match: '매치', nassau: '나소', bestball: '베스트볼', vegas: '라스베가스', bonus: '보너스' };
@@ -65,6 +66,7 @@
     s.meSkipped = s.meSkipped || {};
     if (s.round) { fillGames(s.round.games = s.round.games || {}); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); }
     s.joining = null;
+    s.mapZoom = null;
     return s;
   }
   var TAB_ID = (function () { try { var t = sessionStorage.getItem('gs.tab'); if (!t) { t = S.randomId(4); sessionStorage.setItem('gs.tab', t); } return t; } catch (e) { return S.randomId(4); } })();
@@ -231,6 +233,9 @@
     var r = findRoundByCode(code);
     if (r === state.round) {
       resetBaseline();
+      // 두 기기가 같은 사람의 샷·벌타·퍼트를 거의 동시에 고치면 타수(합계)는 늦게 쓴 쪽 값만 남아 구성 요소의 합과 어긋날 수 있다.
+      // 받은 쪽에서 합계를 다시 계산해 맞춘다. 모든 기기가 같은 값을 쓰므로 서로 덮어써도 결과는 같다
+      if (changed.some(function (k) { return /^(st|score):/.test(k); }) && reconcileAuto(r)) save();
       if (changed.indexOf('status') >= 0 && r.status === 'closed' && !isHost()) {
         closeSession(); r.share.active = false; r.status = 'live'; resetBaseline();
         toast('호스트가 공유를 종료했어요. 점수는 내 기기에 남아요.');
@@ -421,6 +426,24 @@
   }
   function canEdit(r, pid) { return !state.readOnly && r === state.round && (entryMode(r) === 'all' || pid === myPid()); }
   function setStat(r, pid, h, f, v) { return S.setKey(r, 'st:' + pid + ':' + h + ':' + f, v); }
+  /** 벌타: OB 1번 = 2타(OB티에서 이어 치는 기준), 해저드 1번 = 1타 */
+  function penaltyOf(r, pid, h) { return (A.stat(r, pid, h, 'ob') || 0) * A.OB_COST + (A.stat(r, pid, h, 'hz') || 0) * A.HZ_COST; }
+  /** 샷 수 + 벌타 + 퍼트 수로 계산한 타수. 샷 수와 퍼트 수가 모두 입력돼 있을 때만 (아니면 null → 타수는 직접 입력한 값 그대로) */
+  function autoScore(r, pid, h) {
+    var sh = A.stat(r, pid, h, 'sh'), pt = A.stat(r, pid, h, 'pt');
+    if (sh === null || pt === null) return null;
+    return Math.min(15, Math.max(1, sh + penaltyOf(r, pid, h) + pt));
+  }
+  function applyAutoScore(r, pid, h) {
+    var v = autoScore(r, pid, h);
+    if (v === null || !r.scores[pid] || r.scores[pid][h] === v) return false;
+    r.scores[pid][h] = v; return true;
+  }
+  function reconcileAuto(r) {
+    var changed = false;
+    r.players.forEach(function (p) { for (var h = 0; h < r.holes; h++) if (applyAutoScore(r, p.id, h)) changed = true; });
+    return changed;
+  }
   /** 이 홀에 기록된 OB·해저드·3퍼트를 이름 아래에 작은 표시로 보여 줌 (상세 기록을 켜지 않은 기기에서도 보임) */
   function statTags(r, pid, h) {
     var ob = A.stat(r, pid, h, 'ob'), hz = A.stat(r, pid, h, 'hz'), pt = A.stat(r, pid, h, 'pt'), out = '';
@@ -441,6 +464,7 @@
     var pid = esc(p.id);
     function v(f) { return A.stat(r, p.id, h, f); }
     var sum = [];
+    if (v('sh') !== null) sum.push('샷 ' + v('sh'));
     if (v('ob')) sum.push('OB ' + v('ob'));
     if (v('hz')) sum.push('해저드 ' + v('hz'));
     if (v('bk')) sum.push('벙커 ' + v('bk'));
@@ -448,7 +472,7 @@
     if (v('pt') !== null) sum.push('퍼트 ' + v('pt'));
     var head = '<button class="detail-head" data-action="detail-open" data-pid="' + pid + '" aria-expanded="' + (open ? 'true' : 'false') + '">' +
       '<span class="caret">' + (open ? '▾' : '▸') + '</span><span class="ttl">상세 기록</span>' +
-      (sum.length ? '<span class="sumtxt">' + esc(sum.join(' · ')) + '</span>' : '<span class="sumtxt none">OB · 해저드 · 퍼트</span>') + '</button>';
+      (sum.length ? '<span class="sumtxt">' + esc(sum.join(' · ')) + '</span>' : '<span class="sumtxt none">샷 · OB · 해저드 · 퍼트</span>') + '</button>';
     if (!open) return '<div class="detail' + (myPid() === p.id ? ' mine' : '') + '">' + head + '</div>';
     function stepper(f, label) {
       var n = v(f) || 0;
@@ -457,7 +481,17 @@
         '<span class="n ' + (n ? 'on' : '') + '">' + n + '</span>' +
         '<button class="mini" data-action="stat" data-pid="' + pid + '" data-f="' + f + '" data-delta="1" aria-label="' + label + ' 늘리기">＋</button></div>';
     }
-    var pt = v('pt'), fw = v('fw');
+    var pt = v('pt'), fw = v('fw'), sh = v('sh'), pen = penaltyOf(r, p.id, h), auto = autoScore(r, p.id, h);
+    // 샷 수(퍼트·벌타를 뺀, 실제로 친 횟수). 샷 수와 퍼트 수를 넣으면 타수 = 샷 + 벌타 + 퍼트로 자동 계산된다
+    var shots = '<div class="stp wide"><span class="lab">샷 수</span>' +
+      '<button class="mini" data-action="stat" data-pid="' + pid + '" data-f="sh" data-delta="-1" ' + (sh === null ? 'disabled' : '') + ' aria-label="샷 수 줄이기">−</button>' +
+      '<span class="n ' + (sh === null ? '' : 'on') + '">' + (sh === null ? '–' : sh) + '</span>' +
+      '<button class="mini" data-action="stat" data-pid="' + pid + '" data-f="sh" data-delta="1" aria-label="샷 수 늘리기">＋</button>' +
+      '<span class="small muted">티샷부터 그린에 올릴 때까지 (퍼트 제외)</span></div>';
+    var formula = auto !== null
+      ? '<div class="sumline">샷 ' + sh + (pen ? ' + 벌타 ' + pen : '') + ' + 퍼트 ' + pt + ' = <b>' + auto + '타</b></div>'
+      : '<div class="sumline muted">' + (sh !== null ? '퍼트 수를 고르면 타수가 계산돼요.' : pt !== null ? '샷 수를 넣으면 타수가 계산돼요.' : '샷 수와 퍼트 수를 넣으면 타수가 자동으로 계산돼요.') +
+        ' <span class="small">샷 + 벌타(OB 2타 · 해저드 1타) + 퍼트</span></div>';
     var putts = '<div class="stp wide"><span class="lab">퍼트</span><div class="chips">' + [0, 1, 2, 3, 4].map(function (k) {
       var on = pt !== null && (pt === k || (k === 4 && pt >= 4));
       return '<button class="chip tap num ' + (on ? 'active' : '') + '" data-action="stat-set" data-pid="' + pid + '" data-f="pt" data-v="' + k + '">' + (k === 4 ? '4+' : k) + '</button>';
@@ -466,10 +500,107 @@
       return '<button class="chip tap ' + (fw === o[0] ? 'active' : '') + '" data-action="stat-set" data-pid="' + pid + '" data-f="fw" data-v="' + o[0] + '">' + o[1] + '</button>';
     }).join('') + '</div></div>' : '';
     return '<div class="detail open' + (myPid() === p.id ? ' mine' : '') + '">' + head + '<div class="detail-body">' +
-      stepper('ob', 'OB') + stepper('hz', '해저드') + stepper('bk', '벙커') + fairway + putts + '</div></div>';
+      shots + stepper('ob', 'OB') + stepper('hz', '해저드') + stepper('bk', '벙커') + fairway + putts + formula + '</div></div>';
   }
   // ───────────────────────── 코스 정보: 홀 약도 · 공략 · 입력 ─────────────────────────
   function setHoleInfo(r, h, f, v) { return S.setKey(r, 'hi:' + h + ':' + f, v); }
+  // ── 코스 안내도를 단순하게 옮긴 홀 약도 (기본 제공 코스, coursemaps.js) ──
+  var TEE_NAME = { K: '블랙', B: '블루', W: '화이트', Y: '옐로', R: '레드' };
+  var TEE_FILL = { K: '#1d1d1d', B: '#0069b4', W: '#ffffff', Y: '#b5d22e', R: '#e31e1e' };
+  /** 이 라운드의 이 홀에 쓸 수 있는 약도: 코스 이름이 약도가 있는 기본 제공 코스와 같고 홀 수가 맞을 때 */
+  function courseLayout(r, h) {
+    var m = COURSE_MAPS[(r.course || '').trim()];
+    return Array.isArray(m) && m.length === r.holes && m[h] && Array.isArray(m[h].o) ? m[h] : null;
+  }
+  /** 다각형 [x1,y1,x2,y2,…] → 꼭짓점 사이의 중점을 지나는 부드러운 닫힌 곡선 */
+  function smoothPath(a) {
+    var n = a.length >> 1; if (n < 3) return '';
+    function X(i) { return a[(i % n) * 2]; }
+    function Y(i) { return a[(i % n) * 2 + 1]; }
+    var d = 'M' + (X(0) + X(1)) / 2 + ' ' + (Y(0) + Y(1)) / 2;
+    for (var i = 1; i <= n; i++) d += 'Q' + X(i) + ' ' + Y(i) + ' ' + (X(i) + X(i + 1)) / 2 + ' ' + (Y(i) + Y(i + 1)) / 2;
+    return d + 'Z';
+  }
+  /**
+   * 약도 SVG. big = 크게 보기(거리 숫자·캐리 지점·거리 표시까지), 아니면 작은 그림(모양·티·깃대·50m 단위 점선만).
+   * w, hpx를 주면 그 크기(px)로, 없으면 가로 폭에 맞춘다
+   */
+  function layoutMap(lay, h, big, w, hpx) {
+    var id = 'lm' + h + (big ? 'z' : ''), H = lay.h, c = (lay.c || [])[0], tees = lay.t || [], ips = lay.ip || [], s = '';
+    function paths(list, attrs) { return (list || []).map(function (a) { var d = smoothPath(a); return d ? '<path d="' + d + '" ' + attrs + '/>' : ''; }).join(''); }
+    var outline = lay.o && lay.o[0] ? smoothPath(lay.o[0]) : '';
+    s += '<rect width="500" height="' + H + '" rx="20" fill="#e9f3ec"/>';
+    if (outline) s += '<clipPath id="' + id + '"><path d="' + outline + '"/></clipPath><path d="' + outline + '" fill="#9ccfa6"/>';
+    s += paths(lay.d, 'fill="#5f9f72"') + paths(lay.w, 'fill="#8fbbef"') + paths(lay.f, 'fill="#c8e8c6"') +
+      paths(lay.g, 'fill="#4fb56f" stroke="#2f8f52" stroke-width="' + (big ? 2 : 4) + '"') +
+      paths(lay.b, 'fill="#f3e6b8" stroke="#d9c88e" stroke-width="' + (big ? 1.5 : 3) + '"');
+    var white = null;
+    tees.forEach(function (t) { if (!white && t[0] === 'W') white = t; });
+    white = white || tees[0] || null;
+    if (c && lay.s > 0) {
+      var far = 0;
+      tees.forEach(function (t) { far = Math.max(far, Math.sqrt(Math.pow(t[1] - c[0], 2) + Math.pow(t[2] - c[1], 2))); });
+      // 그린 중심에서 50m 단위 점선 (숫자는 공략선 옆에)
+      var tw = ips.length ? ips[ips.length - 1] : (white ? [white[1], white[2]] : [c[0], c[1] + 1]);
+      var ux = tw[0] - c[0], uy = tw[1] - c[1], ul = Math.sqrt(ux * ux + uy * uy) || 1; ux /= ul; uy /= ul;
+      [50, 100, 150, 200, 250].forEach(function (m) {
+        var rr = m * lay.s; if (rr > far - 10) return;
+        s += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="' + rr.toFixed(1) + '" fill="none" stroke="#fff" stroke-width="' + (big ? 2 : 4) + '" stroke-dasharray="' + (big ? '5 7' : '10 12') + '" opacity=".9"' +
+          (outline ? ' clip-path="url(#' + id + ')"' : '') + '/>';
+        if (big) s += '<text class="arc" x="' + (c[0] + ux * rr - uy * 32).toFixed(0) + '" y="' + (c[1] + uy * rr + ux * 32).toFixed(0) + '">' + m + '</text>';
+      });
+      if (white) { // 화이트티 → 공략 지점 → 그린 중심
+        var pts = [[white[1], white[2]]].concat(ips).concat([c]);
+        s += '<polyline points="' + pts.map(function (q) { return q[0] + ',' + q[1]; }).join(' ') + '" fill="none" stroke="#fff" stroke-width="' + (big ? 2.5 : 5) +
+          '" stroke-dasharray="' + (big ? '1 8' : '2 14') + '" stroke-linecap="round" opacity=".95"/>';
+      }
+    }
+    if (big) {
+      (lay.m || []).forEach(function (q) { s += '<rect x="' + (q[0] - 3.5) + '" y="' + (q[1] - 3.5) + '" width="7" height="7" fill="#16211b"/><text class="mk" x="' + (q[0] + 8) + '" y="' + (q[1] + 5) + '">' + q[2] + '</text>'; });
+      (lay.cy || []).forEach(function (q) { s += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="7" fill="#fff" stroke="#16211b" stroke-width="2.5"/><text class="cy" x="' + (q[0] + (q[3] === 'L' ? -12 : 12)) + '" y="' + (q[1] + 6) + '" text-anchor="' + (q[3] === 'L' ? 'end' : 'start') + '">' + q[2] + 'm</text>'; });
+      ips.forEach(function (q) { s += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="6" fill="#e34948" stroke="#fff" stroke-width="2"/>'; });
+    }
+    var tr = big ? 9 : 17;
+    tees.forEach(function (t) { s += '<circle cx="' + t[1] + '" cy="' + t[2] + '" r="' + tr + '" fill="' + (TEE_FILL[t[0]] || '#888') + '" stroke="' + (t[0] === 'W' ? '#16211b' : '#fff') + '" stroke-width="' + (big ? 1.5 : 3) + '"/>'; });
+    var k = big ? 1 : 2;
+    (lay.c || []).forEach(function (g) {
+      s += '<line x1="' + g[0] + '" y1="' + g[1] + '" x2="' + g[0] + '" y2="' + (g[1] - 26 * k) + '" stroke="#16211b" stroke-width="' + (2 * k) + '"/>' +
+        '<path d="M' + g[0] + ' ' + (g[1] - 26 * k) + ' l' + (15 * k) + ' ' + (6 * k) + ' l' + (-15 * k) + ' ' + (6 * k) + ' z" fill="#e34948"/>';
+    });
+    return '<svg class="laymap' + (big ? ' big' : '') + '" viewBox="0 0 500 ' + H + '"' + (w ? ' width="' + w + '" height="' + hpx + '"' : '') + ' role="img" aria-label="' + (h + 1) + '번홀 약도">' + s + '</svg>';
+  }
+  /** 코스 정보 카드에 넣는 작은 약도 (누르면 크게 보기). 높이 제한 안에서 비율을 유지한다 */
+  function layoutThumb(lay, h, maxH) {
+    var k = Math.min(112 / 500, maxH / lay.h), w = Math.round(500 * k), hp = Math.round(lay.h * k);
+    return '<button class="laybtn" data-action="map-zoom" aria-label="' + (h + 1) + '번홀 약도 크게 보기">' + layoutMap(lay, h, false, w, hp) + '<span class="zoomhint">🔍 크게</span></button>';
+  }
+  /** 안내도에서 읽은 사실: 고저차, 화이트티에서 표시 지점까지의 거리 */
+  function layoutNotes(lay) {
+    var out = [], e = lay.e || [], g = e.length ? e[e.length - 1] : null;
+    if (g !== null && Math.abs(g) >= 4) {
+      out.push(['⛰️', g < 0 ? '그린이 티보다 ' + (-g) + 'm 낮은 내리막 홀이에요.' + (g <= -10 ? ' 평소보다 한 클럽 짧게 잡아도 돼요.' : '')
+        : '그린이 티보다 ' + g + 'm 높은 오르막 홀이에요.' + (g >= 10 ? ' 한 클럽 길게 잡으세요.' : '')]);
+    }
+    var cy = (lay.cy || []).slice().sort(function (a, b) { return a[2] - b[2]; });
+    if (cy.length) out.push(['📏', '화이트티에서 안내도 표시 지점(벙커·해저드 등)까지 ' + cy.map(function (q) { return (q[3] === 'L' ? '왼쪽 ' : '오른쪽 ') + q[2] + 'm'; }).join(' · ')]);
+    return out.map(function (o) { return '<div class="coachline"><span class="ic">' + o[0] + '</span><span>' + o[1] + '</span></div>'; }).join('');
+  }
+  /** 약도 크게 보기 (화면을 덮는 창). 티별 거리와 안내도 표시를 함께 보여 준다 */
+  function mapZoom(r, h, par) {
+    var lay = state.mapZoom === h ? courseLayout(r, h) : null;
+    if (!lay) return '';
+    var info = A.holeInfo(r, h);
+    var tees = (lay.t || []).map(function (t) {
+      return '<span class="teechip"><i style="background:' + (TEE_FILL[t[0]] || '#888') + '"></i>' + (TEE_NAME[t[0]] || '') + ' <b>' + t[3] + 'm</b></span>';
+    }).join('');
+    return '<div class="mapzoom" data-action="map-close"><div class="mapzoom-card" data-action="map-stay" role="dialog" aria-label="' + (h + 1) + '번홀 약도">' +
+      '<div class="row between"><b>' + (h + 1) + '번홀 · 파' + par + (info.dist ? ' · ' + info.dist + 'm' : '') + '</b><button class="btn sm" data-action="map-close">닫기</button></div>' +
+      layoutMap(lay, h, true) +
+      '<div class="teechips">' + tees + '</div>' +
+      '<div class="stack small">' + layoutNotes(lay) +
+      '<div class="muted">흰 점선은 그린 중심까지 50m 단위, 작은 숫자는 그 자리에서 그린 중심까지 남은 거리예요. 동그라미는 안내도에 캐리 거리가 표시된 지점(화이트티 기준)이에요.</div>' +
+      '<div class="muted">코스 안내도를 단순하게 옮긴 그림이라 실제 지형과 다를 수 있어요.</div></div></div></div>';
+  }
   /** 입력한 정보로 그리는 홀 약도. 실제 지형이 아니라 홀의 형태와 위험 요소의 위치만 나타낸다 */
   function holeMap(info, par) {
     var L = info.shape === 'L', R = info.shape === 'R', hz = info.haz;
@@ -513,16 +644,19 @@
   }
   /** 코스 정보 중 입력란이 없는 부분(메모·공략·약도). 입력하는 동안이나 동반자가 고쳤을 때 이 영역만 다시 그린다 */
   function courseLive(r, h, par) {
-    var info = A.holeInfo(r, h), open = !!state.courseOpen;
+    var info = A.holeInfo(r, h), open = !!state.courseOpen, lay = courseLayout(r, h);
     var tips = A.holeTips(r, h, myPid());
     var notes = '';
     if (info.memo) notes += '<div class="coachline"><span class="ic">📝</span><span>' + esc(info.memo) + '</span></div>';
+    if (lay) notes += layoutNotes(lay);
     notes += tips.map(function (t) { return '<div class="coachline"><span class="ic">🧭</span><span>' + esc(t) + '</span></div>'; }).join('');
     // 펼친 동안에는 약도 영역을 항상 같은 높이로 그린다(공략 글은 약도 높이 안에서 스크롤) → 위험 요소를 누르거나 거리를 적어도
     // 바로 아래 입력란이 밀리지 않는다. 접은 상태에서는 홀 형태나 위험 요소가 있을 때만 약도를 보여 주고 글은 전부 펼친다
-    if (open || info.shape || info.haz) {
-      return '<div class="course-view' + (open ? ' fixed' : '') + '">' + holeMap(info, par) + '<div class="stack grow">' + (notes || '<div class="muted small">위험 요소나 거리를 입력하면 공략 팁이 여기에 나와요.</div>') +
-        '<div class="muted small">약도는 입력한 정보로 그린 그림이에요. 실제 지형과 다를 수 있어요.</div></div></div>';
+    if (open || info.shape || info.haz || lay) {
+      // 코스 안내도 약도가 있는 홀(기본 제공 코스)은 그 그림을, 없으면 입력한 정보로 그린 도식을 보여 준다
+      return '<div class="course-view' + (open ? ' fixed' : '') + '">' + (lay ? layoutThumb(lay, h, open ? 171 : 280) : holeMap(info, par)) +
+        '<div class="stack grow">' + (notes || '<div class="muted small">위험 요소나 거리를 입력하면 공략 팁이 여기에 나와요.</div>') +
+        '<div class="muted small">' + (lay ? '약도는 코스 안내도를 단순하게 옮긴 그림이에요. 누르면 크게 보여요.' : '약도는 입력한 정보로 그린 그림이에요. 실제 지형과 다를 수 있어요.') + '</div></div></div>';
     }
     return notes ? '<div class="stack course-notes">' + notes + '</div>' : '';
   }
@@ -1031,6 +1165,7 @@
       (h === r.holes - 1 ? '<button class="btn primary" data-action="finish">라운드 종료 🏁</button>'
         : '<button class="btn ' + (allIn ? 'primary' : '') + '" data-action="hole" data-i="' + (h + 1) + '">다음 홀 ›</button>') + '</div>';
     html += '</div>';
+    html += '<div data-region="mapzoom" style="display:contents">' + mapZoom(r, h, par) + '</div>';
     html += bottomNav('play');
     return html;
   }
@@ -1665,6 +1800,12 @@
     score: function (d) {
       var r = state.round, h = r.currentHole, delta = Number(d.delta);
       if (!r.scores[d.pid] || !canEdit(r, d.pid)) return;
+      if (autoScore(r, d.pid, h) !== null) { // 자동 계산 중인 칸: ±는 샷 수를 바꾼다 (합계와 구성 요소가 어긋나지 않게)
+        var sh = A.stat(r, d.pid, h, 'sh') + (delta > 0 ? 1 : -1);
+        if (sh < 1 || sh > S.STAT_FIELDS.sh.max) return;
+        setStat(r, d.pid, h, 'sh', sh); applyAutoScore(r, d.pid, h);
+        save(); render(); return;
+      }
       var cur = r.scores[d.pid][h];
       var v = cur === null || cur === undefined ? r.pars[h] + delta : cur + delta;
       r.scores[d.pid][h] = Math.min(15, Math.max(1, v));
@@ -1675,7 +1816,12 @@
       if (!r.scores[d.pid] || !canEdit(r, d.pid)) return;
       if (r.scores[d.pid][h] === null || r.scores[d.pid][h] === undefined) { r.scores[d.pid][h] = r.pars[h]; save(); render(); }
     },
-    'score-clear': function (d, el, ev) { ev.stopPropagation(); var r = state.round; if (!r.scores[d.pid] || !canEdit(r, d.pid)) return; r.scores[d.pid][r.currentHole] = null; save(); render(); },
+    'score-clear': function (d, el, ev) {
+      ev.stopPropagation(); var r = state.round; if (!r.scores[d.pid] || !canEdit(r, d.pid)) return;
+      r.scores[d.pid][r.currentHole] = null;
+      setStat(r, d.pid, r.currentHole, 'sh', null); // 샷 수도 지운다: 남아 있으면 다음 입력 때 타수가 다시 계산돼 버림
+      save(); render();
+    },
     'par-all': function () {
       var r = state.round, h = r.currentHole;
       r.players.forEach(function (p) { if (canEdit(r, p.id) && r.scores[p.id][h] === null) r.scores[p.id][h] = r.pars[h]; });
@@ -1700,11 +1846,23 @@
     },
     // 여러 사람의 상세 기록을 함께 펼쳐 둘 수 있다: 하나를 열 때 다른 줄을 접으면 누른 자리가 위로 밀려 엉뚱한 칸을 누르게 됨
     'detail-open': function (d) { var o = state.detailOpen = state.detailOpen || {}; if (o[d.pid]) delete o[d.pid]; else o[d.pid] = true; save(); render(); },
-    stat: function (d) { // OB·해저드·벙커 횟수 ±1
+    stat: function (d) { // 샷 수 · OB · 해저드 · 벙커 횟수 ±1
       var r = state.round, f = d.f;
-      if (!r || !G.playerById(r, d.pid) || !canEdit(r, d.pid) || (f !== 'ob' && f !== 'hz' && f !== 'bk')) return;
-      var h = r.currentHole, cur = A.stat(r, d.pid, h, f) || 0;
-      setStat(r, d.pid, h, f, Math.min(S.STAT_FIELDS[f].max, Math.max(0, cur + (Number(d.delta) > 0 ? 1 : -1))));
+      if (!r || !G.playerById(r, d.pid) || !canEdit(r, d.pid) || (f !== 'sh' && f !== 'ob' && f !== 'hz' && f !== 'bk')) return;
+      var h = r.currentHole, up = Number(d.delta) > 0;
+      if (f === 'sh') {
+        var sh = A.stat(r, d.pid, h, 'sh'), v;
+        if (sh === null) { // 처음 누를 때: 이미 넣은 타수가 있으면 거기서 벌타·퍼트(없으면 2퍼트로 가정)를 뺀 값, 없으면 파 온 기준(파 − 2)
+          var sc = r.scores[d.pid][h], pt0 = A.stat(r, d.pid, h, 'pt');
+          v = (sc !== null && sc !== undefined) ? sc - penaltyOf(r, d.pid, h) - (pt0 === null ? 2 : pt0) : r.pars[h] - 2;
+          v = Math.max(1, v);
+        } else v = sh + (up ? 1 : -1);
+        setStat(r, d.pid, h, 'sh', v < 1 ? null : Math.min(S.STAT_FIELDS.sh.max, v)); // 1에서 −를 누르면 지움
+      } else {
+        var cur = A.stat(r, d.pid, h, f) || 0;
+        setStat(r, d.pid, h, f, Math.min(S.STAT_FIELDS[f].max, Math.max(0, cur + (up ? 1 : -1))));
+      }
+      applyAutoScore(r, d.pid, h);
       save(); render();
     },
     'stat-set': function (d) { // 퍼트 수 · 페어웨이: 값을 눌러 정하고, 같은 값을 다시 누르면 지움
@@ -1713,6 +1871,7 @@
       var h = r.currentHole, v = Number(d.v), cur = A.stat(r, d.pid, h, f);
       var same = cur !== null && (cur === v || (f === 'pt' && v === 4 && cur >= 4));
       setStat(r, d.pid, h, f, same ? null : v);
+      applyAutoScore(r, d.pid, h);
       save(); render();
     },
     'entry-mode': function (d) {
@@ -1723,6 +1882,9 @@
     },
     // 코스 정보
     'course-toggle': function () { state.courseOpen = !state.courseOpen; save(); render(); },
+    'map-zoom': function () { var r = state.round; if (!r) return; state.mapZoom = r.currentHole; save(); render(); }, // 그 홀에서만 열려 있다(홀을 옮기면 닫힘)
+    'map-close': function () { state.mapZoom = null; save(); render(); },
+    'map-stay': function () { }, // 창 안쪽을 눌렀을 때는 닫지 않는다
     'course-jump': function () { // 홀 카드의 요약 줄 → 아래 코스 정보 카드로 이동 (접힌 카드에 보여 줄 내용이 없는 홀이면 입력란을 펼침: 정보가 없거나 거리만 있는 홀)
       var r = state.round; if (!r) return;
       if (!state.courseOpen && !courseLive(r, r.currentHole, r.pars[r.currentHole])) { state.courseOpen = true; save(); render(); }

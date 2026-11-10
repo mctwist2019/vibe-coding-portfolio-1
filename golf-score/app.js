@@ -756,13 +756,14 @@
   }
   /**
    * 추가를 누르지 않고 다른 홀이나 다른 화면으로 넘어갔으면, 쓰던 글을 그 홀의 키워드로 넣어 준다 (예전 메모 칸은 치는 대로 저장됐다).
-   * 같은 홀에 머무는 동안에는 쓰던 글로 남겨 둔다. 넣을 수 없는 글(너무 길거나 칸이 가득 참)은 버리지 않고 입력란에 남겨 돌아왔을 때 보이게 한다
+   * 같은 홀에 머무는 동안에는 쓰던 글로 남겨 둔다. 넣을 수 없는 글(너무 길거나 칸이 가득 참)은 버리지 않고 입력란에 남겨 돌아왔을 때 보이게 한다.
+   * force: 라운드를 종료하거나 기록으로 넘기기 직전 (아직 그 홀에 있어도 넣는다)
    */
-  function flushKwDraft() {
+  function flushKwDraft(force) {
     var d = state.kwDraft, r = state.round;
     if (!d) return;
     if (!r || r.id !== d.rid) { state.kwDraft = null; return; } // 그 라운드는 이미 끝났다
-    if (state.view === 'play' && r.currentHole === d.h && !state.readOnly) return;
+    if (!force && state.view === 'play' && r.currentHole === d.h && !state.readOnly) return;
     if (state.readOnly || !A.memoWords(d.v).length) { state.kwDraft = null; return; }
     var n = addKeywords(r, d.h, d.v);
     if (n === 'long' || n === 'full') return;
@@ -1824,6 +1825,7 @@
     var r = state.round; if (!r) return;
     var left = r.holes - holesDone(r);
     if (!confirm((left ? '아직 ' + left + '홀이 미입력이에요. ' : '') + '라운드를 종료하고 기록으로 저장할까요?' + (sharingActive() ? '\n함께하는 모든 참가자에게 종료가 표시돼요.' : ''))) return;
+    flushKwDraft(true); // 쓰던 키워드가 있으면 종료 전에 넣는다
     r.status = 'finished'; r.finishedAt = Date.now();
     save(); // 변경 감지 → status 전송 예약
     var finished = false;
@@ -1845,6 +1847,7 @@
   }
   function archiveCurrent() {
     var r = state.round; if (!r) return;
+    flushKwDraft(true); // 쓰던 키워드가 있으면 코스 저장 전에 넣는다
     r.finishedAt = r.finishedAt || Date.now();
     autoSaveCourse(r); // 코스 이름을 넣은 라운드는 코스 정보를 기기에 저장 (이미 저장해 둔 코스에는 이번 라운드에서 고친 칸만 반영)
     state.history = state.history.filter(function (h) { return h.id !== r.id; });

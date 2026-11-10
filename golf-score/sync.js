@@ -32,6 +32,19 @@
     vegas: { enabled: 'bool', net: 'bool', unit: 'money' },
     bonus: { nearest: 'bool', longest: 'bool', birdie: 'bool', unit: 'money' }
   };
+  /**
+   * 홀별 상세 기록(선택 입력): round.stats[pid][hole][field]
+   *   ob/hz/bk = 횟수(1 이상만 저장, 0은 '기록 없음'), pt = 퍼트 수(0 = 칩인), fw = 티샷 결과 1 페어웨이 안착 / 2 왼쪽 / 3 오른쪽
+   */
+  var STAT_FIELDS = { ob: { min: 1, max: 9 }, hz: { min: 1, max: 9 }, bk: { min: 1, max: 9 }, pt: { min: 0, max: 9 }, fw: { min: 1, max: 3 } };
+  var STAT_NAMES = Object.keys(STAT_FIELDS);
+  /**
+   * 홀별 코스 정보(선택 입력): round.holeInfo[hole] = { dist: 거리(1~999), shape: 'S' 직선 | 'L' 좌 도그렉 | 'R' 우 도그렉,
+   *   haz: 위험 요소 비트(1 OB좌, 2 OB우, 4 해저드좌, 8 해저드우, 16 그린 앞 해저드, 32 벙커좌, 64 벙커우, 128 그린 주변 벙커), memo: 공략 메모 }
+   * 코스 이름은 round.course
+   */
+  var HOLE_FIELDS = ['dist', 'shape', 'haz', 'memo'];
+  var MEMO_MAX = 200, COURSE_MAX = 40;
   var PRESENCE_INTERVAL = 25000;
   var PRESENCE_TTL = 75000;
   var OP_DEBOUNCE = 250;
@@ -94,9 +107,9 @@
   function isInt(v) { return typeof v === 'number' && isFinite(v) && Math.floor(v) === v; }
   function clampInt(v, lo, hi) { v = Math.round(Number(v)); if (!isFinite(v)) return null; return Math.min(hi, Math.max(lo, v)); }
   function cleanStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max); }
-  var RESERVED_PID = /^(__proto__|constructor|prototype|hasOwnProperty|toString|valueOf)$/;
-  function cleanPid(v) { var s = String(v == null ? '' : v).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24); return RESERVED_PID.test(s) ? '' : s; }
-  function isReservedPid(id) { return RESERVED_PID.test(String(id)); }
+  /** 플레이어 id는 객체 키로 쓰이므로 Object.prototype의 멤버 이름(__proto__, constructor, isPrototypeOf …)과 겹치면 안 됨 */
+  function isReservedPid(id) { id = String(id); return id === 'prototype' || id in Object.prototype; }
+  function cleanPid(v) { var s = String(v == null ? '' : v).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24); return isReservedPid(s) ? '' : s; }
   function playerOf(round, pid) {
     for (var i = 0; i < round.players.length; i++) if (round.players[i].id === pid) return round.players[i];
     return null;
@@ -138,6 +151,12 @@
     switch (p[0]) {
       case 'meta': return metaOf(round);
       case 'name': return round.name == null ? '' : round.name;
+      case 'course': return round.course == null ? '' : String(round.course);
+      case 'hi': {
+        var hi = round.holeInfo && round.holeInfo[+p[1]], hv = hi ? hi[p[2]] : null;
+        if (p[2] === 'dist' || p[2] === 'haz') return typeof hv === 'number' && isFinite(hv) && hv > 0 ? hv : null; // 정수화는 setKey에서
+        return typeof hv === 'string' && hv ? hv : null;
+      }
       case 'status': return round.status || 'live';
       case 'pl': { var pl = playerOf(round, p[1]); if (!pl) return undefined; return p[2] === 'hcp' ? (Number(pl.hcp) || 0) : p[2] === 'team' ? (pl.team || '') : (pl.name || ''); }
       case 'gm': { var g = round.games && round.games[p[1]]; return g ? g[p[2]] : undefined; }
@@ -145,6 +164,7 @@
       case 'si': return round.strokeIndex[+p[1]];
       case 'score': { var s = round.scores[p[1]]; var v = s ? s[+p[2]] : null; return isInt(v) ? v : null; }
       case 'extra': { var e = round.extras && round.extras[+p[1]]; return e && e[p[2]] ? e[p[2]] : null; }
+      case 'st': { var ss = round.stats && round.stats[p[1]] && round.stats[p[1]][+p[2]]; var sv = ss ? ss[p[3]] : null; return typeof sv === 'number' && isFinite(sv) ? sv : null; }
     }
     return undefined;
   }
@@ -156,6 +176,24 @@
     switch (p[0]) {
       case 'meta': return false; // 불변
       case 'name': round.name = cleanStr(v, 60); return true;
+      case 'course': round.course = cleanStr(v, COURSE_MAX); return true;
+      case 'hi': {
+        h = +p[1];
+        if (!(h >= 0 && h < round.holes) || HOLE_FIELDS.indexOf(p[2]) < 0) return false;
+        var iv = null;
+        if (!(v === null || v === undefined || v === '')) {
+          if (p[2] === 'dist') { iv = clampInt(v, 0, 999); if (iv === null) return false; }
+          else if (p[2] === 'haz') { iv = clampInt(v, 0, 255); if (iv === null) return false; }
+          else if (p[2] === 'shape') { if (v !== 'S' && v !== 'L' && v !== 'R') return false; iv = v; }
+          else iv = cleanStr(String(v).replace(/[\r\n\t]+/g, ' '), MEMO_MAX).trim();
+          if (iv === 0 || iv === '') iv = null; // 0과 빈 문자열은 '정보 없음'과 같은 값으로 저장
+        }
+        round.holeInfo = round.holeInfo || {};
+        var info = round.holeInfo[h] || {};
+        if (iv === null) delete info[p[2]]; else info[p[2]] = iv;
+        if (Object.keys(info).length) round.holeInfo[h] = info; else delete round.holeInfo[h];
+        return true;
+      }
       case 'status': if (v === 'live' || v === 'finished' || v === 'closed') { round.status = v; return true; } return false;
       case 'pl': {
         var pl = playerOf(round, p[1]); if (!pl) return false;
@@ -189,6 +227,22 @@
         if (!cur.nearest && !cur.longest) delete round.extras[h]; else round.extras[h] = cur;
         return true;
       }
+      case 'st': {
+        h = +p[2]; var sf = STAT_FIELDS[p[3]];
+        if (!sf || !STAT_FIELDS.hasOwnProperty(p[3]) || !(h >= 0 && h < round.holes) || !playerOf(round, p[1])) return false;
+        var nv = null;
+        if (!(v === null || v === undefined)) {
+          nv = clampInt(v, 0, sf.max);
+          if (nv === null) return false;
+          if (nv < sf.min) nv = null; // 횟수 0은 '기록 없음'과 같은 값으로 저장 (복제본 간 표현 통일)
+        }
+        round.stats = round.stats || {};
+        var ps = round.stats[p[1]] || {}, hs = ps[h] || {};
+        if (nv === null) delete hs[p[3]]; else hs[p[3]] = nv;
+        if (Object.keys(hs).length) ps[h] = hs; else delete ps[h];
+        if (Object.keys(ps).length) round.stats[p[1]] = ps; else delete round.stats[p[1]];
+        return true;
+      }
     }
     return false;
   }
@@ -196,7 +250,7 @@
   /** 라운드에 존재하는 모든 키 (값이 있거나 rev가 있는 것) */
   function allKeys(round) {
     var rev = round.rev || {};
-    var keys = ['meta', 'name', 'status'];
+    var keys = ['meta', 'name', 'status', 'course'];
     var h;
     (round.players || []).forEach(function (p) { keys.push('pl:' + p.id + ':name', 'pl:' + p.id + ':hcp', 'pl:' + p.id + ':team'); });
     Object.keys(GAME_SCHEMA).forEach(function (g) {
@@ -217,6 +271,23 @@
         if ((e && e[f]) || rev[k]) keys.push(k);
       });
     }
+    for (h = 0; h < round.holes; h++) {
+      var info = round.holeInfo && round.holeInfo[h];
+      for (var m = 0; m < HOLE_FIELDS.length; m++) {
+        var hk = 'hi:' + h + ':' + HOLE_FIELDS[m];
+        if ((info && info[HOLE_FIELDS[m]] != null) || rev[hk]) keys.push(hk);
+      }
+    }
+    (round.players || []).forEach(function (p) {
+      var ps = round.stats && round.stats[p.id];
+      for (var i = 0; i < round.holes; i++) {
+        var hs = ps && ps[i];
+        for (var j = 0; j < STAT_NAMES.length; j++) {
+          var k = 'st:' + p.id + ':' + i + ':' + STAT_NAMES[j];
+          if ((hs && typeof hs[STAT_NAMES[j]] === 'number') || rev[k]) keys.push(k);
+        }
+      }
+    });
     return keys;
   }
 
@@ -279,7 +350,8 @@
     if (inc.ts !== loc.ts) return inc.ts > loc.ts;
     return String(inc.by || '') > String(loc.by || '');
   }
-  var KEY_RE = /^(meta|name|status|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:\d{1,2}|si:\d{1,2}|score:[A-Za-z0-9_-]{1,24}:\d{1,2}|extra:\d{1,2}:(nearest|longest))$/;
+  // 홀 번호는 앞자리 0 없는 표기만 허용: 'score:a:07'이 'score:a:7'과 같은 칸을 다른 rev 키로 덮어쓰지 못하게 함
+  var KEY_RE = /^(meta|name|status|course|hi:(0|[1-9]\d?):(dist|shape|haz|memo)|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(ob|hz|bk|pt|fw))$/;
 
   /**
    * 들어온 키들을 LWW로 병합. 반환: {changed:[키], localNewer:bool, maxTs}
@@ -699,7 +771,7 @@
   }
 
   return {
-    ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
+    ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,
     createClock: createClock, maxRevTs: maxRevTs, cleanPid: cleanPid, isReservedPid: isReservedPid,

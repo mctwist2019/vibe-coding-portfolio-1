@@ -216,3 +216,78 @@ details.adv summary::before { content: '▸ '; }
 details.adv[open] summary::before { content: '▾ '; }
 .toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px); background: #16211b; color: #fff; padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 50; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── 입력 범위(내 점수만/모두) · 홀별 상세 기록 ── */
+.entrybar { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; flex-wrap: wrap; }
+.entrybar .who { margin-left: auto; }
+.seg.sm button { padding: 5px 10px; font-size: 13px; min-height: 32px; }
+.quick { flex-wrap: wrap; }
+.quick .btn { white-space: nowrap; }
+.btn.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary-dark); }
+.scorebox.ro { border-style: dashed; background: #f7f9f7; }
+.scorerow.locked .name { font-weight: 600; }
+.detail { padding: 0 0 6px; }
+.detail.mine { background: var(--primary-soft); margin: 0 -14px; padding: 0 14px 8px; }
+.detail-head { border: 0; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 2px 0; min-height: 32px; display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; }
+.detail-head .caret { width: 12px; }
+.detail-head .sumtxt { font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.detail-head .sumtxt.none { font-weight: 400; color: var(--muted); }
+.detail-body { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 4px 0 4px; }
+.stp { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.stp.wide { grid-column: 1 / -1; }
+.stp .lab { font-size: 13px; color: var(--muted); font-weight: 600; flex: 0 0 52px; }
+.stp .n { min-width: 20px; text-align: center; font-weight: 800; font-size: 17px; color: var(--muted); }
+.stp .n.on { color: var(--text); }
+.mini { border: 0; border-radius: 10px; width: 40px; height: 36px; font-size: 20px; font-weight: 700; background: #eef2ef; color: var(--primary-dark); flex: 0 0 auto; }
+.detail.mine .mini { background: #fff; }
+.mini:disabled { opacity: .35; }
+.chip.num { min-width: 40px; }
+@media (max-width: 380px) { .detail-body { gap: 8px 6px; } .mini { width: 34px; } .stp .lab { flex-basis: 40px; } }
+
+/* ── 코치 한마디 · 경기 분석 ── */
+.coachline { display: flex; gap: 8px; font-size: 14px; line-height: 1.45; }
+.coachline .ic { flex: 0 0 auto; }
+.coachline .who { font-weight: 700; flex: 0 0 auto; min-width: 3.2em; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tiles.two { grid-template-columns: repeat(2, 1fr); }
+.tile { background: #f6f8f6; border-radius: 12px; padding: 10px; min-width: 0; }
+.tile .tl { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .tv { font-size: 22px; font-weight: 700; line-height: 1.25; color: var(--text); }
+.tile .ts { font-size: 11px; color: var(--muted); }
+.segbar { display: flex; gap: 2px; height: 28px; }
+.segbar > div { border-radius: 4px; display: flex; align-items: center; padding-left: 7px; font-size: 13px; font-weight: 700; min-width: 5px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.legend i.line { width: 14px; height: 2px; border-radius: 1px; vertical-align: 3px; }
+.chart { margin-top: 6px; }
+.chart svg { width: 100%; height: auto; display: block; touch-action: manipulation; }
+.chart .ax { font-size: 9.5px; fill: #898781; font-variant-numeric: tabular-nums; }
+.chart .lbl { font-size: 11px; font-weight: 700; fill: var(--text); }
+.chart rect[data-action] { cursor: pointer; }
+.readout { background: #f6f8f6; border-radius: 10px; padding: 8px 10px; margin-top: 6px; }
+.ro-row { display: flex; align-items: center; gap: 8px; font-size: 14px; padding-top: 4px; }
+.ro-row .key { width: 14px; height: 2px; border-radius: 1px; flex: 0 0 auto; }
+.ro-row b { min-width: 2.2em; font-variant-numeric: tabular-nums; }
+.ro-row .muted { margin-left: auto; }
+.linkbtn { border: 0; background: transparent; color: var(--primary); font-weight: 700; padding: 0; text-decoration: underline; font-size: inherit; }
+.kv .k { white-space: nowrap; }
+
+/* ── 코스 정보: 약도 · 공략 · 입력 ── */
+.course { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+.course-head .sumtxt { flex: 1 1 auto; min-width: 0; }
+.course-notes { padding: 2px 0 4px; }
+.course-view { display: flex; gap: 12px; align-items: flex-start; padding: 4px 0 8px; }
+.holemap { width: 108px; flex: 0 0 auto; border-radius: 10px; }
+.holemap .ob { font-size: 6.5px; font-weight: 800; fill: #e34948; text-anchor: middle; dominant-baseline: middle; }
+.holemap .cap { font-size: 9px; font-weight: 700; fill: #16211b; text-anchor: middle; }
+.course-edit { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 2px; }
+.course-edit input.short { width: 96px; }
+.row.top { align-items: flex-start; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; color: inherit; }
+.detail-head .ttl { flex: 0 0 auto; white-space: nowrap; }
+.scorerow .meta .tag { background: #eef2ef; color: var(--text); border-radius: 6px; padding: 0 5px; font-weight: 700; font-size: 11px; line-height: 17px; }
+/* 코스에서 한 손으로 누르는 칩: 높이 36px 이상 */
+.chip.tap { min-height: 36px; padding: 6px 11px; font-size: 14px; }
+.chip.tap.num { min-width: 42px; padding: 6px 8px; }
+.linkbtn { min-height: 30px; padding: 4px 2px; }
+.mini { height: 38px; }

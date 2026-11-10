@@ -1,6 +1,6 @@
 /* 오프라인 지원: 네트워크 우선, 실패 시 캐시 */
-var CACHE = 'golf-score-v6';
-var ASSETS = ['./', './index.html', './styles.css', './games.js', './sync.js', './app.js', './vendor/mqtt.min.js', './icon.svg', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png', './manifest.webmanifest'];
+var CACHE = 'golf-score-v7';
+var ASSETS = ['./', './index.html', './styles.css', './games.js', './analysis.js', './courses.js', './sync.js', './app.js', './vendor/mqtt.min.js', './icon.svg', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png', './manifest.webmanifest'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(ASSETS); }).then(function () { return self.skipWaiting(); }));

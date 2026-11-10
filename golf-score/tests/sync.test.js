@@ -256,6 +256,8 @@ test('open() never throws synchronously: malformed base64 is a rejection', async
 test('reserved property names are not valid player ids', () => {
   assert.equal(S.cleanPid('__proto__'), '');
   assert.equal(S.cleanPid('constructor'), '');
+  assert.equal(S.cleanPid('isPrototypeOf'), '', 'any Object.prototype member name is reserved');
+  assert.equal(S.cleanPid('toLocaleString'), '');
   assert.equal(S.cleanPid('abc_1-2'), 'abc_1-2');
   const keys = S.exportKeys(mkRound());
   keys.meta.v.playerIds = ['__proto__', 'a', 'b'];
@@ -301,4 +303,78 @@ test('local writes are canonicalized like remote setKey so replicas converge (fr
   S.merge(b, S.exportKeys(a, d.changed));
   assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
   assert.deepEqual(G.strokesPerHole(4, 9, a.strokeIndex), G.strokesPerHole(4, 9, b.strokeIndex));
+});
+
+// ───── 홀별 상세 기록(st:) · 코스 정보(course, hi:) ─────
+
+test('detail stats sync as field-level keys with validation and tombstones', () => {
+  const a = mkRound(), b = S.roundFromSnapshot(S.exportKeys(mkRound()), defaults);
+  const clock = S.createClock(() => 5000);
+  let base = S.project(a);
+  a.stats = { a: { 2: { ob: 1, pt: 3, fw: 3 } } };
+  let d = S.diffAndStamp(a, base, clock, 'A');
+  assert.deepEqual(d.changed.sort(), ['st:a:2:fw', 'st:a:2:ob', 'st:a:2:pt']);
+  S.merge(b, S.exportKeys(a, d.changed));
+  assert.deepEqual(b.stats, { a: { 2: { ob: 1, pt: 3, fw: 3 } } });
+  // 다른 기기가 같은 홀의 다른 항목을 고쳐도 둘 다 남는다 (필드 단위 LWW)
+  const cb = S.createClock(() => 6000); const baseB = S.project(b);
+  b.stats.a[2].hz = 2;
+  const db = S.diffAndStamp(b, baseB, cb, 'B');
+  base = d.projection; a.stats.a[2].pt = 2;
+  d = S.diffAndStamp(a, base, clock, 'A');
+  S.merge(a, S.exportKeys(b, db.changed)); S.merge(b, S.exportKeys(a, d.changed));
+  assert.deepEqual(a.stats, { a: { 2: { ob: 1, pt: 2, fw: 3, hz: 2 } } });
+  assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
+  // 0으로 내리면 키가 사라지고 null(tombstone)로 전파된다. 퍼트 0은 유효한 값
+  base = S.project(a); a.stats.a[2].ob = 0; a.stats.a[2].pt = 0;
+  d = S.diffAndStamp(a, base, clock, 'A');
+  assert.deepEqual(a.stats.a[2], { pt: 0, fw: 3, hz: 2 });
+  assert.equal(S.exportKeys(a, ['st:a:2:ob'])['st:a:2:ob'].v, null);
+  S.merge(b, S.exportKeys(a, d.changed));
+  assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
+  // 검증: 범위 밖 홀, 모르는 플레이어/필드, 숫자가 아닌 값은 거부, 큰 값은 상한으로
+  const res = S.merge(b, {
+    'st:a:99:ob': { v: 1, ts: 9e3, by: 'x' }, 'st:zz:1:ob': { v: 1, ts: 9e3, by: 'x' }, 'st:a:1:xx': { v: 1, ts: 9e3, by: 'x' },
+    'st:a:1:pt': { v: 'abc', ts: 9e3, by: 'x' }, 'st:a:1:ob': { v: 99, ts: 9e3, by: 'x' }, 'st:a:1:fw': { v: 7, ts: 9e3, by: 'x' },
+    'st:__proto__:1:ob': { v: 1, ts: 9e3, by: 'x' }
+  });
+  assert.deepEqual(res.changed.sort(), ['st:a:1:fw', 'st:a:1:ob']);
+  assert.deepEqual(b.stats.a[1], { ob: 9, fw: 3 }, 'values above the range are clamped');
+  // 홀 번호는 앞자리 0 없는 표기만: 같은 칸을 다른 키로 덮어쓸 수 없다
+  const z = S.merge(b, { 'st:a:01:ob': { v: 2, ts: 9e3 + 1, by: 'x' }, 'score:a:07': { v: 9, ts: 9e3 + 1, by: 'x' }, 'par:00': { v: 5, ts: 9e3 + 1, by: 'x' }, 'hi:03:dist': { v: 100, ts: 9e3 + 1, by: 'x' } });
+  assert.deepEqual(z.changed, []);
+  assert.equal(b.stats.a[1].ob, 9);
+  // 지우면 빈 객체가 남지 않는다
+  S.setKey(b, 'st:a:1:ob', null); S.setKey(b, 'st:a:1:fw', null);
+  assert.equal(b.stats.a[1], undefined);
+});
+
+test('course name and hole info sync, are canonicalized locally, and old rounds stay compatible', () => {
+  const a = mkRound(), b = S.roundFromSnapshot(S.exportKeys(mkRound()), defaults);
+  assert.equal(S.exportKeys(a).course.v, '', 'a round without a course exports an empty name');
+  const clock = S.createClock(() => 5000);
+  const base = S.project(a);
+  a.course = '베어크리크 포천 · 베어';
+  a.holeInfo = { 0: { dist: 352.6, shape: 'L', haz: 17, memo: '왼쪽 OB 조심\n티샷은 우측  ' }, 3: { dist: 0, memo: '' } };
+  const d = S.diffAndStamp(a, base, clock, 'A');
+  assert.deepEqual(a.holeInfo, { 0: { dist: 353, shape: 'L', haz: 17, memo: '왼쪽 OB 조심 티샷은 우측' } }, 'rounded, newline → space, empty values dropped');
+  S.merge(b, S.exportKeys(a, d.changed));
+  assert.equal(b.course, '베어크리크 포천 · 베어');
+  assert.deepEqual(b.holeInfo, a.holeInfo);
+  assert.deepEqual(S.exportKeys(a), S.exportKeys(b));
+  const joiner = S.roundFromSnapshot(S.exportKeys(a), defaults);
+  assert.deepEqual(joiner.holeInfo, a.holeInfo);
+  assert.equal(joiner.course, a.course);
+  const res = S.merge(b, {
+    'hi:0:shape': { v: 'X', ts: 9e3, by: 'x' }, 'hi:99:dist': { v: 5, ts: 9e3, by: 'x' }, 'hi:1:bogus': { v: 1, ts: 9e3, by: 'x' },
+    'hi:1:haz': { v: 9999, ts: 9e3, by: 'x' }, 'hi:1:memo': { v: '<b>x</b>'.repeat(100), ts: 9e3, by: 'x' }, 'course': { v: 'x'.repeat(99), ts: 9e3, by: 'x' }
+  });
+  assert.deepEqual(res.changed.sort(), ['course', 'hi:1:haz', 'hi:1:memo']);
+  assert.equal(b.holeInfo[1].haz, 255);
+  assert.equal(b.holeInfo[1].memo.length, S.MEMO_MAX);
+  assert.equal(b.course.length, S.COURSE_MAX);
+  assert.equal(b.holeInfo[0].shape, 'L', 'invalid shape rejected');
+  // 형태를 지우면 tombstone
+  S.setKey(b, 'hi:0:shape', null);
+  assert.equal(b.holeInfo[0].shape, undefined);
 });

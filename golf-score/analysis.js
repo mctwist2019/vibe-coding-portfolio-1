@@ -149,12 +149,13 @@
     //  even    = 스코어가 있는 사람 모두가 정확히 같은 홀들을 입력함 (표의 순위를 그대로 믿어도 됨)
     //  cmpGap  = 모두가 입력한 홀(공통 홀)까지만 비교한 선두와의 타수 차. 각자 입력하는 '내 점수만' 모드에서
     //            한 사람이 한 홀 먼저 입력해도 순위 멘트가 뒤집히지 않게 한다. 누군가 2홀 이상 밀려 있으면 비교하지 않음(null)
-    var even = true, common = [], maxPlayed = 0, cmp = {}, cmpLead = null, cmpLeaders = 0;
+    //            두 명 이상이 입력했는데 다른 누군가가 비워 둔 홀이 있을 때도 비교하지 않는다: 그 홀을 빼면 입력한 사람들끼리의 순위가 틀어진다
+    var even = true, split = false, common = [], maxPlayed = 0, cmp = {}, cmpLead = null, cmpLeaders = 0;
     for (h = 0; h < round.holes; h++) {
       var entered = 0;
       active.forEach(function (r) { if (r.holes[h] !== null) entered++; });
       if (entered && entered === active.length) common.push(h);
-      else if (entered) even = false;
+      else if (entered) { even = false; if (entered > 1) split = true; }
     }
     active.forEach(function (r) {
       if (r.played > maxPlayed) maxPlayed = r.played;
@@ -162,7 +163,7 @@
       if (cmpLead === null || cmp[r.id] < cmpLead) cmpLead = cmp[r.id];
     });
     active.forEach(function (r) { if (cmp[r.id] === cmpLead) cmpLeaders++; });
-    var fair = active.length >= 2 && common.length >= 3 && maxPlayed - common.length <= 1;
+    var fair = active.length >= 2 && common.length >= 3 && maxPlayed - common.length <= 1 && !split;
     var players = rows.map(function (r) {
       return { id: r.id, name: r.name, team: r.team, played: r.played, gross: r.gross, toPar: r.toPar, rank: r.rank,
         tied: r.rank !== null && rankCount[r.rank] > 1, gap: r.played ? r.toPar - lead : null, remaining: round.holes - r.played,
@@ -390,21 +391,23 @@
         else if (i.dist <= 440) tips.push('짧은 파5(' + i.dist + 'm)예요. 티샷이 잘 맞으면 버디 기회예요.');
       }
     }
-    // 오늘의 내 기록을 반영한 한 줄
+    // 오늘의 내 기록을 반영한 한 줄. 맨 앞에 넣는 줄은 4줄 제한에 더해 준다 → 코스 경고(그린 앞 해저드 등)가 밀려서 잘리지 않는다
+    var cap = 4;
+    function lead(t) { tips.unshift(t); cap = 5; }
     if (pid && G.playerById(round, pid)) {
       var st = playerStats(round, pid, null, h);
       if (st.played) {
         var bp = st.byPar[parKey(par)];
         var side = teeMissSide(st);
         var steady = '거리보다 방향이 먼저예요. 가장 자신 있는 클럽을 잡으세요.';   // 바깥쪽이 위험한 도그렉에서는 '가운데' 안내와 엇갈리지 않게 방향을 말하지 않는다
-        if (side === 'R' && dangerR && !dangerL) tips.unshift('오늘 티샷이 오른쪽으로 자주 빗나갔는데 이 홀은 오른쪽이 위험해요. ' + (outDanger ? steady : '왼쪽을 넉넉히 보고 치세요.'));
-        else if (side === 'L' && dangerL && !dangerR) tips.unshift('오늘 티샷이 왼쪽으로 자주 빗나갔는데 이 홀은 왼쪽이 위험해요. ' + (outDanger ? steady : '오른쪽을 넉넉히 보고 치세요.'));
-        else if (st.ob >= 2 && (obL || obR)) tips.unshift('오늘 OB가 ' + st.ob + '번 나왔어요. 이 홀도 OB가 있으니 티샷은 가장 자신 있는 클럽으로.');
-        else if (st.hz >= 2 && (wL || wR || (i.haz & HAZ.WATER_FRONT))) tips.unshift('오늘 해저드에 ' + st.hz + '번 들어갔어요. 이 홀의 물은 넉넉하게 피해서 겨냥하세요.');
+        if (side === 'R' && dangerR && !dangerL) lead('오늘 티샷이 오른쪽으로 자주 빗나갔는데 이 홀은 오른쪽이 위험해요. ' + (outDanger ? steady : '왼쪽을 넉넉히 보고 치세요.'));
+        else if (side === 'L' && dangerL && !dangerR) lead('오늘 티샷이 왼쪽으로 자주 빗나갔는데 이 홀은 왼쪽이 위험해요. ' + (outDanger ? steady : '오른쪽을 넉넉히 보고 치세요.'));
+        else if (st.ob >= 2 && (obL || obR)) lead('오늘 OB가 ' + st.ob + '번 나왔어요. 이 홀도 OB가 있으니 티샷은 가장 자신 있는 클럽으로.');
+        else if (st.hz >= 2 && (wL || wR || (i.haz & HAZ.WATER_FRONT))) lead('오늘 해저드에 ' + st.hz + '번 들어갔어요. 이 홀의 물은 넉넉하게 피해서 겨냥하세요.');
         else if (bp.n >= 2 && bp.toPar / bp.n >= 1.5) tips.push('오늘 파' + parKey(par) + '에서 평균 ' + fmtAvg(bp.toPar / bp.n) + '예요. 이 홀은 무리하지 말고 보기로 막는 작전이 좋아요.');
       }
     }
-    return tips.slice(0, 4);
+    return tips.slice(0, cap);
   }
 
   return {

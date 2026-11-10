@@ -152,7 +152,11 @@ test('hole info: labels and strategy tips come only from what was entered', () =
   // 오늘 OB가 많았던 사람에게는 그 사실이 먼저 나온다
   r.stats = { a: { 0: { ob: 1 }, 1: { ob: 1 } } };
   assert.match(A.holeTips(r, 3, 'a')[0], /오늘 OB가 2번/);
-  assert.ok(A.holeTips(r, 3, 'a').length <= 4);
+  assert.ok(A.holeTips(r, 3, 'a').length <= 5);
+  // 내 기록 한 줄이 앞에 붙어도 코스 경고는 밀려나지 않는다 (티샷 3줄 + 그린 앞 해저드)
+  r.holeInfo[7] = { shape: 'L', haz: 1 | 32 | 16 };
+  assert.deepEqual(A.holeTips(r, 7, 'a').slice(1), A.holeTips(r, 7));
+  assert.match(A.holeTips(r, 7, 'a').join(' '), /그린 앞에 해저드/);
   // 잘못된 값은 무시
   r.holeInfo[6] = { dist: 'abc', shape: 'X', haz: -1, memo: 5 };
   assert.deepEqual(A.holeInfo(r, 6), { dist: null, shape: null, haz: 0, memo: '' });
@@ -311,4 +315,26 @@ test('playOrder: an explicitly chosen start (round.startBack) wins over the entr
   assert.equal(A.playOrder(nine).startBack, false);
   const junk = mk(18, { a: [4] }); junk.startBack = 'in';
   assert.equal(A.playOrder(junk).startBack, false);
+});
+
+test('coach: no rank talk while a hole that two or more players entered is missing for someone else', () => {
+  const RANK = /선두|1위/;
+  // 세 명 중 한 명(b)이 7번홀을 아직 입력하지 않음: a와 c는 같은 7홀로 비교할 수 있으므로 6홀 기준 순위를 말하면 틀린다
+  const r = mk(18, { a: [5, 5, 4, 6, 5, 5, 6], b: [5, 5, 4, 6, 5, 6], c: [5, 5, 4, 6, 6, 5, 3] });
+  const st = A.roundStatus(r);
+  st.players.forEach((p) => assert.equal(p.cmpGap, null, p.id));
+  ['a', 'b', 'c'].forEach((id) => { const c = A.coach(r, id, st); assert.doesNotMatch(c.cheers.concat(c.tips).join(' '), RANK, id); assert.ok(c.cheer && c.lead); });
+  r.scores.b[6] = 3;
+  assert.match(A.coach(r, 'a').cheers.join(' '), /선두와 2타 차/);
+  assert.match(A.coach(r, 'c').cheers.join(' '), /공동 선두/);
+  // 네 명 중 한 명(d)이 3번홀을 비워 둔 채 진행: 라운드 내내 틀린 순위를 말하지 않는다
+  const blank = mk(18, { a: [4, 4, 6, 5, 4, 4, 2, 4], b: [4, 4, 3, 5, 4, 4, 3, 4], c: [4, 4, 3, 5, 4, 5, 3, 4], d: [4, 4, null, 5, 4, 4, 3, 4] });
+  ['a', 'b', 'c', 'd'].forEach((id) => { const c = A.coach(blank, id); assert.doesNotMatch(c.cheers.concat(c.tips).join(' '), RANK, id); });
+  // 한 사람만 먼저 입력한 경우는 그대로: 모두가 입력한 홀까지의 순위를 말한다
+  const first = mk(18, { a: [5, 5, 4, 5, 5, 5, 6], b: [5, 5, 4, 6, 5, 5], c: [5, 5, 4, 6, 6, 5] });
+  assert.match(A.coach(first, 'a').cheers.join(' '), /지금 단독 선두/);
+  // 두 사람이 서로 다른 홀을 비운 경우도 그대로: 둘 다 입력한 홀로 비교
+  const two = mk(18, { a: [5, 5, null, 5, 5, 5, 3], b: [5, 5, 4, 6, null, 5, 3] });
+  assert.match(A.coach(two, 'a').cheers.join(' '), /지금 단독 선두/);
+  assert.match(A.coach(two, 'b').cheers.join(' '), /선두와 1타 차/);
 });

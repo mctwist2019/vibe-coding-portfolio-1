@@ -726,8 +726,49 @@
         (g.g ? cell(g.g, g.gName, g.gName + ' ' + g.name) : '<span></span>');
     }).join('');
   }
+  /**
+   * 키워드들을 메모 한 칸(공유 규칙상 최대 S.MEMO_MAX자)으로 잇는다. 보통은 ' · '로 잇고, 그러면 넘치는 경우에는 틈 없이 '·'로 잇는다
+   * (읽을 때는 똑같이 나뉜다). 예전 버전에서 쉼표로 빽빽하게 적어 둔 긴 메모에서 키워드 하나를 지울 때 이음표가 길어져 뒤쪽 키워드가
+   * 잘려 나가는 일이 없게 한다. 그래도 넘치면 null (넣지 않고 알려야 한다)
+   */
+  function joinKw(words) {
+    var memo = words.join(A.MEMO_SEP);
+    if (memo.length <= S.MEMO_MAX) return memo;
+    memo = words.join('·');
+    return memo.length <= S.MEMO_MAX ? memo : null;
+  }
   /** 이 홀에 쓰다 만 키워드 (추가를 누르기 전의 입력란 내용. 다른 곳을 눌러 화면을 다시 그려도 남게 기억해 둔다) */
   function kwDraft(r, h) { var d = state.kwDraft; return d && d.rid === r.id && d.h === h ? d.v : ''; }
+  /**
+   * 입력란 글(text)을 이 홀의 키워드로 더한다. 반환: 더한 개수, 0(전부 이미 있음·빈 글), 'long'(24자를 넘는 키워드가 있음), 'full'(메모 한 칸이 넘침).
+   * 잘라서 넣지 않는다: 토막이 저장되면 동반자에게도 그대로 간다
+   */
+  function addKeywords(r, h, text) {
+    var add = A.memoWords(text);
+    if (add.some(function (w) { return w.length > KW_MAX; })) return 'long';
+    var words = A.memoWords(A.holeInfo(r, h).memo), n = 0;
+    add.forEach(function (w) { if (words.indexOf(w) < 0) { words.push(w); n++; } });
+    if (!n) return 0;
+    var memo = joinKw(words);
+    if (memo === null) return 'full';
+    setHoleInfo(r, h, 'memo', memo);
+    return n;
+  }
+  /**
+   * 추가를 누르지 않고 다른 홀이나 다른 화면으로 넘어갔으면, 쓰던 글을 그 홀의 키워드로 넣어 준다 (예전 메모 칸은 치는 대로 저장됐다).
+   * 같은 홀에 머무는 동안에는 쓰던 글로 남겨 둔다. 넣을 수 없는 글(너무 길거나 칸이 가득 참)은 버리지 않고 입력란에 남겨 돌아왔을 때 보이게 한다
+   */
+  function flushKwDraft() {
+    var d = state.kwDraft, r = state.round;
+    if (!d) return;
+    if (!r || r.id !== d.rid) { state.kwDraft = null; return; } // 그 라운드는 이미 끝났다
+    if (state.view === 'play' && r.currentHole === d.h && !state.readOnly) return;
+    if (state.readOnly || !A.memoWords(d.v).length) { state.kwDraft = null; return; }
+    var n = addKeywords(r, d.h, d.v);
+    if (n === 'long' || n === 'full') return;
+    state.kwDraft = null;
+    if (n) { save(); toast((d.h + 1) + '번홀에 쓰던 키워드를 추가했어요'); }
+  }
   /** 공략 키워드 목록 (지우기 버튼이 달린 꼬리표) */
   function kwChips(r, h) {
     var words = A.memoWords(A.holeInfo(r, h).memo);
@@ -750,7 +791,7 @@
         '<div class="field"><label>위험 요소</label><div class="hazgrid" data-region="course-haz">' + hazGrid(info.haz) + '</div></div>' +
         '<div class="field"><label>공략 키워드' + (builtinCourse(r.course, r.holes) ? ' <span class="muted">(공개 후기 참고)</span>' : '') + '</label>' +
         '<div class="chips" data-region="ce-kw">' + kwChips(r, h) + '</div>' +
-        '<div class="kwadd" data-region="ce-kwadd"><input type="text" id="kw-in" data-kwin="1" value="' + esc(kwDraft(r, h)) + '" maxlength="' + KW_MAX + '" placeholder="예: 내리막, 우측 OB" enterkeyhint="done" autocomplete="off" aria-label="추가할 공략 키워드">' +
+        '<div class="kwadd" data-region="ce-kwadd"><input type="text" id="kw-in" data-kwin="1" value="' + esc(kwDraft(r, h)) + '" maxlength="' + S.MEMO_MAX + '" placeholder="예: 내리막, 우측 OB" enterkeyhint="done" autocomplete="off" aria-label="추가할 공략 키워드">' +
         '<button type="button" class="btn sm" data-action="kw-add">추가</button></div></div></div>';
     }
     // 코스 이름은 라운드 설정에서 고친다 (이 카드 머리말에 이미 보이므로 여기서는 입력란을 두지 않는다)
@@ -1979,13 +2020,13 @@
     'kw-add': function (d, el, ev) { // 공략 키워드 추가 (쉼표로 나눠 여러 개를 한 번에 넣을 수 있다)
       var r = state.round; if (!r || state.readOnly) return;
       var h = r.currentHole, inp = document.getElementById('kw-in');
-      var add = A.memoWords(inp ? inp.value : kwDraft(r, h)).map(function (w) { return w.slice(0, KW_MAX); });
-      if (!add.length) { if (inp) inp.focus(); return; }
-      var words = A.memoWords(A.holeInfo(r, h).memo), n = 0;
-      add.forEach(function (w) { if (words.indexOf(w) < 0) { words.push(w); n++; } });
-      // 메모 한 칸의 길이 제한(공유 규칙)을 넘으면 뒤가 잘려 나가므로 넣지 않고 알려 준다. 쓰던 글은 입력란에 그대로 둔다
-      if (n && words.join(A.MEMO_SEP).length > S.MEMO_MAX) { toast('키워드가 너무 많아요. 안 쓰는 키워드를 지우고 추가해 주세요'); return; }
-      if (n) setHoleInfo(r, h, 'memo', words.join(A.MEMO_SEP)); else toast('이미 있는 키워드예요');
+      var text = inp ? inp.value : kwDraft(r, h);
+      if (!A.memoWords(text).length) { if (inp) inp.focus(); return; }
+      // 너무 긴 키워드나 한도를 넘는 추가는 넣지 않고 알려 준다. 쓰던 글은 입력란에 그대로 둔다
+      var n = addKeywords(r, h, text);
+      if (n === 'long') { toast('키워드 하나는 ' + KW_MAX + '자까지예요. 쉼표로 나눠 짧게 적어 주세요'); return; }
+      if (n === 'full') { toast('키워드가 너무 많아요. 안 쓰는 키워드를 지우고 추가해 주세요'); return; }
+      if (!n) toast('이미 있는 키워드예요');
       state.kwDraft = null;
       save(); render();
       if (ev && ev.type === 'keydown') { var again = document.getElementById('kw-in'); if (again) again.focus(); } // 자판으로 이어서 넣는 중이면 입력란에 머문다
@@ -1995,7 +2036,9 @@
       var h = r.currentHole, words = A.memoWords(A.holeInfo(r, h).memo), i = words.indexOf(d.kw);
       if (i < 0) return;
       words.splice(i, 1);
-      setHoleInfo(r, h, 'memo', words.join(A.MEMO_SEP));
+      var memo = joinKw(words);
+      while (memo === null) { words.pop(); memo = joinKw(words); } // 일어나지 않는 경우(지우면 늘 짧아진다)지만, 중간이 잘린 토막을 남기지는 않는다
+      setHoleInfo(r, h, 'memo', memo);
       save(); render();
     },
     'del-course': function () { // 저장한 코스 삭제 (같은 이름의 기본 제공 코스가 있으면 그 값으로 되돌아감)
@@ -2076,6 +2119,7 @@
     if (!el || !$app.contains(el)) return;
     var fn = actions[el.dataset.action];
     if (fn) fn(el.dataset, el, ev);
+    flushKwDraft(); // 쓰던 키워드를 둔 채 다른 홀·다른 화면으로 넘어갔으면 그 홀에 넣어 준다
   });
 
   function bindInput(el, rerender) {
@@ -2096,6 +2140,7 @@
   }
   $app.addEventListener('input', function (ev) {
     var el = ev.target;
+    el._typed = el.value; // 이 입력란에서 마지막으로 받은 값 (아래 change 처리에서 쓴다)
     if (el.dataset && el.dataset.hi) { courseInput(el); return; }
     if (el.dataset && el.dataset.kwin) { var kr = state.round; state.kwDraft = kr ? { rid: kr.id, h: kr.currentHole, v: el.value } : null; return; }
     if (!el.dataset || !el.dataset.bind) return;
@@ -2104,8 +2149,12 @@
   });
   $app.addEventListener('change', function (ev) {
     var el = ev.target; if (!el.dataset || !el.dataset.bind) return;
+    var toggle = el.type === 'checkbox' || el.tagName === 'SELECT';
+    // 글·숫자 입력란은 칠 때마다(input) 이미 저장했다. 입력란을 떠날 때의 change에서 같은 값을 또 쓰면, 그 사이 동반자가 고친 새 값을
+    // (커서가 있는 입력란은 다시 그리지 않아 화면에는 옛 글이 남아 있다) 옛 글로 덮어쓰게 된다 → 마지막 input 뒤로 달라진 게 없으면 쓰지 않는다
+    if (!toggle && el._typed === el.value) return;
     // 숫자/텍스트 입력은 blur 시점에 change가 발생하므로 재렌더하면 다음 탭이 유실됨 → 체크박스/셀렉트만 재렌더
-    bindInput(el, el.type === 'checkbox' || el.tagName === 'SELECT');
+    bindInput(el, toggle);
   });
   $app.addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter' && ev.target && ev.target.id === 'join-code') { ev.preventDefault(); joinRoom(ev.target.value, 0); }

@@ -311,6 +311,7 @@ details.adv[open] summary::before { content: '▾ '; }
 /* 첫 줄이 한 줄에 다 들어가지 않는 홀(app.js의 fitSummary가 .flow를 붙인다): 자르지 않고 키워드와 한 문단으로 세 줄까지 이어 보여 준다. 글 영역의 높이(51px)는 같다 */
 .course-sum.flow .txt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; height: 51px; line-height: 17px; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; }
 .course-sum.flow .l1, .course-sum.flow .l2 { display: inline; height: auto; line-height: inherit; white-space: normal; overflow: visible; -webkit-line-clamp: none; line-clamp: none; }
+.course-sum.flow .l1 { font-size: 13px; } /* 이어 보일 때는 조금 작게: 360px 화면에서도 크리크 18홀이 모두 세 줄에 들어간다 */
 /* 둘째 칸(공략 키워드나 첫 공략 팁)은 두 줄까지 보여 준다. 내용이 한 줄이거나 없어도 두 줄 높이를 차지한다 → 요약 줄 높이는 늘 같다 */
 .course-sum .l2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; height: 32px; line-height: 16px; overflow: hidden; font-size: 12px; color: var(--muted); word-break: keep-all; overflow-wrap: anywhere; }
 .course-sum .go { color: var(--muted); font-size: 18px; flex: 0 0 auto; }

@@ -307,12 +307,20 @@
   var SHAPE_LABELS = { S: '직선', L: '좌 도그렉', R: '우 도그렉' };
 
   /** 한 홀의 코스 정보 (없으면 빈 값) */
+  /**
+   * 홀 형태를 따로 정해 주는 함수 (앱이 등록). 코스 안내도 약도가 있는 홀은 라운드에 저장된 값이 아니라 약도 기준 형태를 쓴다.
+   * fn(round, h) → 'S' | 'L' | 'R' | null(형태 없음, 예: 파3) | undefined(정해 주지 않음 → 저장된 값 그대로)
+   */
+  var shapeSource = null;
+  function setShapeSource(fn) { shapeSource = typeof fn === 'function' ? fn : null; }
   function holeInfo(round, h) {
     var i = (round.holeInfo && round.holeInfo[h]) || {};
     var dist = num(i.dist), haz = num(i.haz);
+    var shape = shapeSource ? shapeSource(round, h) : undefined;
+    if (shape === undefined) shape = i.shape;
     return {
       dist: dist !== null && dist > 0 ? dist : null,
-      shape: i.shape === 'S' || i.shape === 'L' || i.shape === 'R' ? i.shape : null,
+      shape: shape === 'S' || shape === 'L' || shape === 'R' ? shape : null,
       haz: haz !== null && haz > 0 ? haz : 0,
       memo: typeof i.memo === 'string' ? i.memo : ''
     };
@@ -411,7 +419,7 @@
   }
 
   return {
-    OB_COST: OB_COST, HZ_COST: HZ_COST, HAZ: HAZ, HAZ_LABELS: HAZ_LABELS, SHAPE_LABELS: SHAPE_LABELS,
+    OB_COST: OB_COST, HZ_COST: HZ_COST, HAZ: HAZ, HAZ_LABELS: HAZ_LABELS, SHAPE_LABELS: SHAPE_LABELS, setShapeSource: setShapeSource,
     stat: stat, playOrder: playOrder, playerStats: playerStats, roundStatus: roundStatus, coach: coach, teeMissSide: teeMissSide,
     holeInfo: holeInfo, hasHoleInfo: hasHoleInfo, holeLabels: holeLabels, holeTips: holeTips,
     fmtAvg: fmtAvg

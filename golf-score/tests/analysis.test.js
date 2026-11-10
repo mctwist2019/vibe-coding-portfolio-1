@@ -162,6 +162,23 @@ test('hole info: labels and strategy tips come only from what was entered', () =
   assert.deepEqual(A.holeInfo(r, 6), { dist: null, shape: null, haz: 0, memo: '' });
 });
 
+test('hole shape: a registered source fixes the shape (holes drawn from a course guide map)', () => {
+  const r = mk(9, { a: [5, 6, 3] });
+  r.holeInfo = { 1: { shape: 'S', haz: 1 }, 2: { shape: 'R' }, 3: { shape: 'R' } };
+  try {
+    A.setShapeSource((round, h) => (h === 1 ? 'L' : h === 2 ? null : undefined));
+    assert.equal(A.holeInfo(r, 1).shape, 'L', 'the source wins over the stored value');
+    assert.ok(A.holeLabels(r, 1).includes('좌 도그렉'));
+    assert.match(A.holeTips(r, 1).join(' '), /왼쪽으로 휘는/);
+    assert.equal(A.holeInfo(r, 2).shape, null, 'null from the source means no shape (e.g. a par 3)');
+    assert.equal(A.holeInfo(r, 3).shape, 'R', 'undefined from the source keeps the stored value');
+    assert.equal(r.holeInfo[1].shape, 'S', 'the stored value itself is not rewritten');
+    A.setShapeSource(() => 'X');
+    assert.equal(A.holeInfo(r, 1).shape, null, 'an invalid value from the source is ignored');
+  } finally { A.setShapeSource(null); }
+  assert.equal(A.holeInfo(r, 1).shape, 'S');
+});
+
 test('built-in courses are structurally valid and pass sync validation unchanged', () => {
   const S = require('../sync.js');
   const courses = require('../courses.js');

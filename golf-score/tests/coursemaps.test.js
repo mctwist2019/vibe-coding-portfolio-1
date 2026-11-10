@@ -41,3 +41,14 @@ test('course maps: every map belongs to a built-in course and is drawable', () =
     });
   });
 });
+
+test('course maps: the built-in course gives every par 4/5 map hole a shape (shown as fixed in the app), and par 3s none', () => {
+  Object.keys(maps).forEach((name) => {
+    const course = courses.find((c) => c.name === name);
+    course.pars.forEach((par, h) => {
+      const shape = ((course.holeInfo || {})[h] || {}).shape;
+      if (par === 3) assert.equal(shape, undefined, name + ' #' + (h + 1) + ' par 3 has no shape');
+      else assert.ok(shape === 'S' || shape === 'L' || shape === 'R', name + ' #' + (h + 1) + ' shape ' + shape);
+    });
+  });
+});

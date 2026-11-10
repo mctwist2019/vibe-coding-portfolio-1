@@ -523,6 +523,16 @@
     var m = COURSE_MAPS[(r.course || '').trim()];
     return Array.isArray(m) && m.length === r.holes && m[h] && Array.isArray(m[h].o) ? m[h] : null;
   }
+  /**
+   * 약도가 있는 홀의 형태는 약도(기본 제공 코스 자료) 기준으로 고정한다. 화면에 그려진 약도와 한 줄 요약·공략 팁이 어긋나지 않게,
+   * 라운드에 저장된 값(예전에 형태 버튼을 눌러 바꿨거나 옛 버전 기기가 보낸 값)은 쓰지 않는다. 약도가 없으면 undefined → 저장된 값 그대로
+   */
+  function guideShape(r, h) {
+    if (!r || !courseLayout(r, h)) return undefined;
+    var bi = builtinCourse(r.course, r.holes), i = bi && bi.holeInfo && bi.holeInfo[h];
+    return i && (i.shape === 'S' || i.shape === 'L' || i.shape === 'R') ? i.shape : null;
+  }
+  A.setShapeSource(guideShape);
   /** 다각형 [x1,y1,x2,y2,…] → 꼭짓점 사이의 중점을 지나는 부드러운 닫힌 곡선 */
   function smoothPath(a) {
     var n = a.length >> 1; if (n < 3) return '';
@@ -680,6 +690,17 @@
    * 점수 칸 위에 있으면 높이가 변할 때마다 ＋/− 버튼이 손가락 밑에서 밀려 다른 사람 점수를 누르게 된다.
    * 펼쳤을 때는 미리보기(약도·공략)를 높이가 고정된 영역으로 입력란 바로 위에 둔다: 입력 결과가 바로 보이면서 입력란은 움직이지 않는다.
    */
+  /**
+   * 홀 형태 칸. 안내도 약도가 있는 홀은 형태가 약도에 이미 정해져 있으므로 고르는 버튼 대신 그 값만 보여 준다 (guideShape. 파3처럼 형태가 없으면 칸을 비움).
+   * 약도가 없는 코스에서는 여기서 고른 형태로 도식을 그리고 공략 팁을 만든다
+   */
+  function shapeField(r, h) {
+    var shape = A.holeInfo(r, h).shape;
+    if (courseLayout(r, h)) return shape ? '<label>홀 형태</label><div class="fixedval">' + A.SHAPE_LABELS[shape] + ' <span class="muted small">약도 기준</span></div>' : '';
+    return '<label>홀 형태</label><div class="seg sm">' + [['L', '좌 도그렉'], ['S', '직선'], ['R', '우 도그렉']].map(function (o) {
+      return '<button type="button" data-action="hi-shape" data-v="' + o[0] + '" class="' + (shape === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
+    }).join('') + '</div>';
+  }
   function courseBlock(r, h, par) {
     var info = A.holeInfo(r, h), open = !!state.courseOpen;
     var html = '<div class="card course" id="course-card">' +
@@ -691,9 +712,7 @@
       html += '<div class="course-edit">' +
         '<div class="field" data-region="ce-name"><label>코스 이름 <span class="muted">(모든 홀 공통)</span></label><input type="text" data-course="name" value="' + esc(r.course || '') + '" maxlength="' + S.COURSE_MAX + '" placeholder="예: 베어크리크 포천 · 베어" autocomplete="off"></div>' +
         '<div class="row top"><div class="field" data-region="ce-dist"><label>' + (h + 1) + '번홀 거리 (m)</label><input type="number" inputmode="numeric" min="0" max="999" data-hi="dist" value="' + (info.dist || '') + '" placeholder="예: 350" class="short"></div>' +
-        '<div class="field grow"><label>홀 형태</label><div class="seg sm" data-region="course-shape">' + [['L', '좌 도그렉'], ['S', '직선'], ['R', '우 도그렉']].map(function (o) {
-          return '<button type="button" data-action="hi-shape" data-v="' + o[0] + '" class="' + (info.shape === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
-        }).join('') + '</div></div></div>' +
+        '<div class="field grow" id="course-shape" data-region="course-shape">' + shapeField(r, h) + '</div></div>' +
         '<div class="field"><label>위험 요소 <span class="muted">(해당하는 것 모두)</span></label><div class="chips" data-region="course-haz">' + A.HAZ_LABELS.map(function (e) {
           return '<button class="chip tap ' + (info.haz & e[0] ? 'active' : '') + '" data-action="hi-haz" data-bit="' + e[0] + '">' + e[1] + '</button>';
         }).join('') + '</div></div>' +
@@ -716,6 +735,7 @@
     set('course-live', courseLive(r, h, r.pars[h]));
     set('course-sum', courseSumInner(r, h));
     if (isName) {
+      set('course-shape', shapeField(r, h)); // 이름이 약도가 있는 코스와 같아지거나 달라지면 형태 칸도 바뀐다
       set('course-actions', courseActions(r));
       var hs = set('course-headsum', esc(r.course || '거리 · 형태 · 위험 요소 · 메모'));
       if (hs) hs.className = 'sumtxt' + (r.course ? '' : ' none');
@@ -1914,6 +1934,7 @@
     'hi-shape': function (d) {
       var r = state.round; if (!r || state.readOnly) return;
       var h = r.currentHole, cur = A.holeInfo(r, h).shape;
+      if (courseLayout(r, h)) return; // 약도가 있는 홀의 형태는 약도 기준으로 고정
       setHoleInfo(r, h, 'shape', cur === d.v ? null : d.v); save(); render();
     },
     'hi-haz': function (d) {

@@ -531,10 +531,10 @@
       html += '<div class="course-edit">' +
         '<div class="field"><label>코스 이름 <span class="muted">(모든 홀 공통)</span></label><input type="text" data-course="name" value="' + esc(r.course || '') + '" maxlength="' + S.COURSE_MAX + '" placeholder="예: 베어크리크 포천 · 베어" autocomplete="off"></div>' +
         '<div class="row top"><div class="field"><label>' + (h + 1) + '번홀 거리 (m)</label><input type="number" inputmode="numeric" min="0" max="999" data-hi="dist" value="' + (info.dist || '') + '" placeholder="예: 350" class="short"></div>' +
-        '<div class="field grow"><label>홀 형태</label><div class="seg sm">' + [['L', '좌 도그렉'], ['S', '직선'], ['R', '우 도그렉']].map(function (o) {
+        '<div class="field grow"><label>홀 형태</label><div class="seg sm" data-region="course-shape">' + [['L', '좌 도그렉'], ['S', '직선'], ['R', '우 도그렉']].map(function (o) {
           return '<button type="button" data-action="hi-shape" data-v="' + o[0] + '" class="' + (info.shape === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
         }).join('') + '</div></div></div>' +
-        '<div class="field"><label>위험 요소 <span class="muted">(해당하는 것 모두)</span></label><div class="chips">' + A.HAZ_LABELS.map(function (e) {
+        '<div class="field"><label>위험 요소 <span class="muted">(해당하는 것 모두)</span></label><div class="chips" data-region="course-haz">' + A.HAZ_LABELS.map(function (e) {
           return '<button class="chip tap ' + (info.haz & e[0] ? 'active' : '') + '" data-action="hi-haz" data-bit="' + e[0] + '">' + e[1] + '</button>';
         }).join('') + '</div></div>' +
         '<div class="field"><label>공략 메모</label><input type="text" data-hi="memo" value="' + esc(info.memo) + '" maxlength="' + S.MEMO_MAX + '" placeholder="예: 티샷은 우측 벙커 방향, 그린 뒤는 내리막" autocomplete="off"></div>' +
@@ -991,7 +991,7 @@
     }).join('');
     html += '<div class="quick" style="margin-top:10px">' +
       (mode === 'all' ? '<button class="btn sm grow" data-action="par-all">전원 파 입력</button><button class="btn sm ghost" data-action="clear-hole">홀 초기화</button>' : '') +
-      '<button class="btn sm ' + (state.detailOn ? 'on' : '') + (mode === 'all' ? '' : ' grow') + '" data-action="toggle-detail" aria-pressed="' + (state.detailOn ? 'true' : 'false') + '">📝 상세 기록' + (state.detailOn ? ' 끄기' : '') + '</button></div>';
+      '<button class="btn sm ' + (state.detailOn ? 'on' : '') + (mode === 'all' ? '' : ' grow') + '" data-action="toggle-detail" aria-pressed="' + (state.detailOn ? 'true' : 'false') + '">📝 상세 기록</button></div>'; // 켜고 꺼도 글자가 같다: 길이가 바뀌면 버튼 줄이 다시 접혀 누른 자리가 달라짐 (켜짐은 색으로 표시)
     if (mode === 'mine') html += '<div class="muted small" style="margin-top:8px">다른 사람 점수는 각자 입력하면 여기에 바로 보여요. 폰이 없는 동반자 점수는 위에서 <b>모두 입력</b>으로 바꿔 넣을 수 있어요.</div>';
     if (!sharingActive() && holesDone(r) < 2 && !state.hintSeen) html += '<div class="muted small" style="margin-top:8px">동반자도 각자 입력하게 하려면 맨 위의 <b>👥 함께</b>를 눌러 코드를 보내세요. <button class="btn sm ghost" data-action="dismiss-hint">닫기</button></div>';
     html += '</div>';

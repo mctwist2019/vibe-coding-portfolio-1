@@ -294,6 +294,8 @@ details.adv[open] summary::before { content: '▾ '; }
 /* 입력 중(펼친 상태): 공략 글을 약도 높이(108×171px)에 맞춰 고정 → 팁이 늘어도 아래 입력란 위치가 변하지 않는다 */
 .course-view.fixed { height: 179px; }
 .course-view.fixed > .stack { max-height: 171px; overflow-y: auto; min-width: 0; }
+/* 글이 약도 높이를 넘으면 아래쪽이 옅어져 더 있다는 것을 알려 준다 (넘지 않으면 글 끝에 붙어 보이지 않음) */
+.course-view.fixed > .stack::after { content: ''; display: block; position: sticky; bottom: 0; flex: 0 0 22px; height: 22px; margin-top: -14px; background: linear-gradient(rgba(255,255,255,0), var(--card)); pointer-events: none; }
 .holemap .ob { font-size: 6.5px; font-weight: 800; fill: #e34948; text-anchor: middle; dominant-baseline: middle; }
 .holemap .cap { font-size: 9px; font-weight: 700; fill: #16211b; text-anchor: middle; }
 .course-edit { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 2px; }

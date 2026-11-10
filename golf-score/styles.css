@@ -111,6 +111,24 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 .holehead .meta { display: flex; flex-direction: column; gap: 6px; flex: 1; }
 .holehead .si { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .holehead .si input { width: 56px; min-height: 30px; padding: 4px 6px; text-align: center; border-radius: 8px; }
+/* 홀 머리말은 어느 홀에서나 한 줄이다(높이가 같아야 홀을 넘겨도 점수 칸이 같은 자리에 있다).
+   홀 번호가 두 자리여도 '번홀'이 글자 단위로 꺾이지 않게 하고, 좁은 화면에서는 글자와 칸을 줄여 한 줄에 맞춘다 */
+.holehead .num { flex: 0 0 auto; white-space: nowrap; }
+.holehead .meta { min-width: 0; }
+@media (max-width: 380px) {
+  .holehead { gap: 8px; }
+  .holehead .num { font-size: 34px; }
+  .holehead .num small { font-size: 14px; }
+  .holehead .seg button { padding: 8px 9px; }
+  .holehead .si input { width: 46px; }
+}
+@media (max-width: 340px) {
+  .holehead .num { font-size: 30px; }
+  .holehead .meta .row { gap: 5px; }
+  .holehead .seg button { padding: 8px 7px; }
+  .holehead .si { gap: 4px; }
+  .holehead .si input { width: 40px; }
+}
 .hole-strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 6px; scrollbar-width: none; }
 .hole-strip::-webkit-scrollbar { display: none; }
 .hole-strip button { flex: 0 0 38px; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-weight: 700; color: var(--muted); }
@@ -290,6 +308,9 @@ details.adv[open] summary::before { content: '▾ '; }
 .course-sum .txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .course-sum .l1 { display: block; height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; font-weight: 700; }
 .course-sum .l1.none { font-weight: 600; color: var(--muted); }
+/* 첫 줄이 한 줄에 다 들어가지 않는 홀(app.js의 fitSummary가 .flow를 붙인다): 자르지 않고 키워드와 한 문단으로 세 줄까지 이어 보여 준다. 글 영역의 높이(51px)는 같다 */
+.course-sum.flow .txt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; height: 51px; line-height: 17px; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; }
+.course-sum.flow .l1, .course-sum.flow .l2 { display: inline; height: auto; line-height: inherit; white-space: normal; overflow: visible; -webkit-line-clamp: none; line-clamp: none; }
 /* 둘째 칸(공략 키워드나 첫 공략 팁)은 두 줄까지 보여 준다. 내용이 한 줄이거나 없어도 두 줄 높이를 차지한다 → 요약 줄 높이는 늘 같다 */
 .course-sum .l2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; height: 32px; line-height: 16px; overflow: hidden; font-size: 12px; color: var(--muted); word-break: keep-all; overflow-wrap: anywhere; }
 .course-sum .go { color: var(--muted); font-size: 18px; flex: 0 0 auto; }

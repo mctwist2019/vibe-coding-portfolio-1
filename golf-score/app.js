@@ -166,6 +166,7 @@
       if (old && !old.contains(focused) && (old.innerHTML !== fresh[i].innerHTML || typedIn(old))) old.innerHTML = fresh[i].innerHTML;
     }
     centerHoleStrip();
+    fitSummary();
   }
   /** 직접 고친 입력란은 화면 값(value)이 마크업(value 속성)과 달라서 innerHTML 비교만으로는 차이가 드러나지 않는다 */
   function typedIn(el) {
@@ -663,7 +664,18 @@
     var none = !line1 && !line2;
     if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = '거리·위험 요소·키워드를 넣으면 약도와 공략 팁이 나와요'; }
     else if (!line1) line1 = r.course || (h + 1) + '번홀 키워드';
-    return '<span class="ic">🗺️</span><span class="txt"><span class="l1' + (none ? ' none' : '') + '">' + esc(line1) + '</span><span class="l2">' + esc(line2) + '</span></span><span class="go">›</span>';
+    return '<span class="ic">🗺️</span><span class="txt"><span class="l1' + (none ? ' none' : '') + '">' + esc(line1) + '</span> <span class="l2">' + esc(line2) + '</span></span><span class="go">›</span>';
+  }
+  /**
+   * 요약 줄 맞춤: 첫 줄(거리·형태·위험 요소)이 한 줄에 다 들어가지 않는 홀은 뒤를 잘라 버리는 대신
+   * 키워드와 한 문단으로 이어 세 줄까지 보여 준다(.flow). 어느 쪽이든 요약 줄의 높이는 같아서 점수 칸은 움직이지 않는다.
+   * 요약 줄을 새로 그릴 때마다 부른다
+   */
+  function fitSummary() {
+    var s = document.getElementById('course-sum'), l1 = s && s.querySelector('.l1');
+    if (!l1) return;
+    s.classList.remove('flow');
+    if (l1.scrollWidth > l1.clientWidth + 1) s.classList.add('flow');
   }
   /** 코스 정보 중 입력란이 없는 부분(키워드·공략·약도). 입력하는 동안이나 동반자가 고쳤을 때 이 영역만 다시 그린다 */
   function courseLive(r, h, par) {
@@ -755,6 +767,7 @@
     var set = function (id, html) { var n = document.getElementById(id); if (n) n.innerHTML = html; };
     set('course-live', courseLive(r, h, r.pars[h]));
     set('course-sum', courseSumInner(r, h));
+    fitSummary();
   }
   /** 기기에 코스 저장 (이름 + 홀 수 기준으로 덮어씀). 새 라운드에서 같은 이름을 고르면 파·핸디캡·홀 정보가 채워진다 */
   function saveCourse(r) {
@@ -1756,6 +1769,7 @@
     window.scrollTo(0, y);
     if (mz && my) mz.scrollTop = my;
     centerHoleStrip();
+    fitSummary();
   }
   /** 다시 그린 뒤에도 방금 누른 버튼(sel)이 손가락 아래 그대로 있도록 스크롤을 맞춘다 (위쪽 내용이 늘거나 줄 때) */
   function renderKeeping(sel) {
@@ -2105,6 +2119,7 @@
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') wakeSession(); });
   window.addEventListener('pageshow', function (e) { if (e.persisted) wakeSession(); });
   window.addEventListener('online', wakeSession);
+  window.addEventListener('resize', fitSummary); // 화면을 돌리거나 폭이 바뀌면 요약 줄 맞춤을 다시 본다
   window.addEventListener('offline', function () { softRender(); });
   window.addEventListener('beforeunload', function () { if (session) session.stop(); });
   setInterval(function () { if (sharingActive() && state.view === 'share') softRender(); }, 10000); // '마지막 동기화 n초 전' 갱신

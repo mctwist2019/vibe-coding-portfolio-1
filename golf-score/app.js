@@ -149,6 +149,8 @@
   function softRender() {
     var a = document.activeElement;
     if (a && $app.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) { renderPending = true; patchRegions(a); return; }
+    // 약도 크게 보기가 열려 있는 동안에는 바뀐 영역만 갈아 끼운다: 창을 새로 만들면 스크롤하던 손가락이 끊긴다 (닫을 때 전체를 다시 그림)
+    if (state.view === 'play' && $app.querySelector('.mapzoom')) { patchRegions(null); return; }
     render();
   }
   function patchRegions(focused) {
@@ -234,8 +236,10 @@
     if (r === state.round) {
       resetBaseline();
       // 두 기기가 같은 사람의 샷·벌타·퍼트를 거의 동시에 고치면 타수(합계)는 늦게 쓴 쪽 값만 남아 구성 요소의 합과 어긋날 수 있다.
-      // 받은 쪽에서 합계를 다시 계산해 맞춘다. 모든 기기가 같은 값을 쓰므로 서로 덮어써도 결과는 같다
-      if (changed.some(function (k) { return /^(st|score):/.test(k); }) && reconcileAuto(r)) save();
+      // 구성 요소(샷·OB·해저드·퍼트)를 방금 받은 칸만 합계를 다시 계산한다. 타수만 온 메시지에는 반응하지 않는다:
+      // 구성 요소 하나를 아직 못 받은 기기와 합계를 끝없이 서로 덮어쓰게 되고, 그때마다 스냅샷 전송이 미뤄져 빠진 값이 영영 전달되지 않기 때문.
+      // (샷 수를 모르는 이전 버전 기기가 직접 고친 타수도 그대로 남는다)
+      if (reconcileAuto(r, changed)) save();
       if (changed.indexOf('status') >= 0 && r.status === 'closed' && !isHost()) {
         closeSession(); r.share.active = false; r.status = 'live'; resetBaseline();
         toast('호스트가 공유를 종료했어요. 점수는 내 기기에 남아요.');
@@ -439,9 +443,15 @@
     if (v === null || !r.scores[pid] || r.scores[pid][h] === v) return false;
     r.scores[pid][h] = v; return true;
   }
-  function reconcileAuto(r) {
-    var changed = false;
-    r.players.forEach(function (p) { for (var h = 0; h < r.holes; h++) if (applyAutoScore(r, p.id, h)) changed = true; });
+  /** 받은 변경 가운데 샷·OB·해저드·퍼트가 바뀐 칸만 합계를 다시 맞춘다 */
+  function reconcileAuto(r, keys) {
+    var changed = false, seen = {};
+    keys.forEach(function (k) {
+      var m = /^st:([A-Za-z0-9_-]+):(\d+):(sh|ob|hz|pt)$/.exec(k);
+      if (!m || seen[m[1] + ':' + m[2]]) return;
+      seen[m[1] + ':' + m[2]] = 1;
+      if (applyAutoScore(r, m[1], +m[2])) changed = true;
+    });
     return changed;
   }
   /** 이 홀에 기록된 OB·해저드·3퍼트를 이름 아래에 작은 표시로 보여 줌 (상세 기록을 켜지 않은 기기에서도 보임) */
@@ -488,9 +498,10 @@
       '<span class="n ' + (sh === null ? '' : 'on') + '">' + (sh === null ? '–' : sh) + '</span>' +
       '<button class="mini" data-action="stat" data-pid="' + pid + '" data-f="sh" data-delta="1" aria-label="샷 수 늘리기">＋</button>' +
       '<span class="small muted">티샷부터 그린에 올릴 때까지 (퍼트 제외)</span></div>';
-    var formula = auto !== null
-      ? '<div class="sumline">샷 ' + sh + (pen ? ' + 벌타 ' + pen : '') + ' + 퍼트 ' + pt + ' = <b>' + auto + '타</b></div>'
-      : '<div class="sumline muted">' + (sh !== null ? '퍼트 수를 고르면 타수가 계산돼요.' : pt !== null ? '샷 수를 넣으면 타수가 계산돼요.' : '샷 수와 퍼트 수를 넣으면 타수가 자동으로 계산돼요.') +
+    var typed = auto !== null && r.scores[p.id][h] !== auto; // 합계와 다른 타수 = 다른 기기에서 직접 고치거나 지운 값
+    var formula = auto !== null && !typed
+      ? '<div class="sumline">샷 ' + sh + (pen ? ' + 벌타 ' + pen : '') + ' + 퍼트 ' + pt + ' = <b>' + auto + '타</b>' + (sh + pen + pt > auto ? ' <span class="small muted">(최대 15타)</span>' : '') + '</div>'
+      : '<div class="sumline muted">' + (typed ? '타수를 직접 고치거나 지운 칸이에요. 샷·벌타·퍼트를 바꾸면 다시 계산돼요.' : sh !== null ? '퍼트 수를 고르면 타수가 계산돼요.' : pt !== null ? '샷 수를 넣으면 타수가 계산돼요.' : '샷 수와 퍼트 수를 넣으면 타수가 자동으로 계산돼요.') +
         ' <span class="small">샷 + 벌타(OB 2타 · 해저드 1타) + 퍼트</span></div>';
     var putts = '<div class="stp wide"><span class="lab">퍼트</span><div class="chips">' + [0, 1, 2, 3, 4].map(function (k) {
       var on = pt !== null && (pt === k || (k === 4 && pt >= 4));
@@ -557,7 +568,10 @@
     }
     if (big) {
       (lay.m || []).forEach(function (q) { s += '<rect x="' + (q[0] - 3.5) + '" y="' + (q[1] - 3.5) + '" width="7" height="7" fill="#16211b"/><text class="mk" x="' + (q[0] + 8) + '" y="' + (q[1] + 5) + '">' + q[2] + '</text>'; });
-      (lay.cy || []).forEach(function (q) { s += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="7" fill="#fff" stroke="#16211b" stroke-width="2.5"/><text class="cy" x="' + (q[0] + (q[3] === 'L' ? -12 : 12)) + '" y="' + (q[1] + 6) + '" text-anchor="' + (q[3] === 'L' ? 'end' : 'start') + '">' + q[2] + 'm</text>'; });
+      (lay.cy || []).forEach(function (q) {
+        var lf = q[3] === 'L' || (q[3] === 'C' && c && q[0] < c[0]); // 숫자를 놓을 쪽 (정면 지점은 그린 중심 기준 바깥쪽)
+        s += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="7" fill="#fff" stroke="#16211b" stroke-width="2.5"/><text class="cy" x="' + (q[0] + (lf ? -12 : 12)) + '" y="' + (q[1] + 6) + '" text-anchor="' + (lf ? 'end' : 'start') + '">' + q[2] + 'm</text>';
+      });
       ips.forEach(function (q) { s += '<circle cx="' + q[0] + '" cy="' + q[1] + '" r="6" fill="#e34948" stroke="#fff" stroke-width="2"/>'; });
     }
     var tr = big ? 9 : 17;
@@ -577,12 +591,13 @@
   /** 안내도에서 읽은 사실: 고저차, 화이트티에서 표시 지점까지의 거리 */
   function layoutNotes(lay) {
     var out = [], e = lay.e || [], g = e.length ? e[e.length - 1] : null;
+    var leg = e.length > 1 ? g - e[e.length - 2] : g; // 클럽 선택은 마지막 구간(공략 지점 → 그린)의 고저차로 안내한다. 파3는 티 → 그린
     if (g !== null && Math.abs(g) >= 4) {
-      out.push(['⛰️', g < 0 ? '그린이 티보다 ' + (-g) + 'm 낮은 내리막 홀이에요.' + (g <= -10 ? ' 평소보다 한 클럽 짧게 잡아도 돼요.' : '')
-        : '그린이 티보다 ' + g + 'm 높은 오르막 홀이에요.' + (g >= 10 ? ' 한 클럽 길게 잡으세요.' : '')]);
+      out.push(['⛰️', g < 0 ? '그린이 티보다 ' + (-g) + 'm 낮은 내리막 홀이에요.' + (leg <= -10 ? ' 평소보다 한 클럽 짧게 잡아도 돼요.' : '')
+        : '그린이 티보다 ' + g + 'm 높은 오르막 홀이에요.' + (leg >= 10 ? ' 한 클럽 길게 잡으세요.' : '')]);
     }
     var cy = (lay.cy || []).slice().sort(function (a, b) { return a[2] - b[2]; });
-    if (cy.length) out.push(['📏', '화이트티에서 안내도 표시 지점(벙커·해저드 등)까지 ' + cy.map(function (q) { return (q[3] === 'L' ? '왼쪽 ' : '오른쪽 ') + q[2] + 'm'; }).join(' · ')]);
+    if (cy.length) out.push(['📏', '화이트티에서 안내도 표시 지점(벙커·해저드 등)까지 ' + cy.map(function (q) { return (q[3] === 'L' ? '왼쪽 ' : q[3] === 'R' ? '오른쪽 ' : '정면 ') + q[2] + 'm'; }).join(' · ')]);
     return out.map(function (o) { return '<div class="coachline"><span class="ic">' + o[0] + '</span><span>' + o[1] + '</span></div>'; }).join('');
   }
   /** 약도 크게 보기 (화면을 덮는 창). 티별 거리와 안내도 표시를 함께 보여 준다 */
@@ -1695,9 +1710,12 @@
     if (cur) strip.scrollLeft = Math.max(0, cur.offsetLeft - strip.clientWidth / 2 + cur.offsetWidth / 2);
   }
   function render() {
-    var y = window.scrollY;
+    var y = window.scrollY, mz = $app.querySelector('.mapzoom'), my = mz ? mz.scrollTop : 0; // 약도 크게 보기 창은 따로 스크롤된다
     $app.innerHTML = viewHtml();
+    mz = $app.querySelector('.mapzoom');
+    document.documentElement.classList.toggle('noscroll', !!mz); // 약도 창이 열려 있는 동안 뒤 화면이 따라 움직이지 않게
     window.scrollTo(0, y);
+    if (mz && my) mz.scrollTop = my;
     centerHoleStrip();
   }
   /** 다시 그린 뒤에도 방금 누른 버튼(sel)이 손가락 아래 그대로 있도록 스크롤을 맞춘다 (위쪽 내용이 늘거나 줄 때) */
@@ -1800,9 +1818,11 @@
     score: function (d) {
       var r = state.round, h = r.currentHole, delta = Number(d.delta);
       if (!r.scores[d.pid] || !canEdit(r, d.pid)) return;
-      if (autoScore(r, d.pid, h) !== null) { // 자동 계산 중인 칸: ±는 샷 수를 바꾼다 (합계와 구성 요소가 어긋나지 않게)
-        var sh = A.stat(r, d.pid, h, 'sh') + (delta > 0 ? 1 : -1);
-        if (sh < 1 || sh > S.STAT_FIELDS.sh.max) return;
+      var auto = autoScore(r, d.pid, h);
+      if (auto !== null && auto === r.scores[d.pid][h]) { // 자동 계산 중인 칸: ±는 샷 수를 바꾼다 (합계와 구성 요소가 어긋나지 않게)
+        var want = auto + (delta > 0 ? 1 : -1); // 화면에 보이는 타수에서 ±1 (합이 15타 상한을 넘어 있어도 한 번에 움직이게)
+        var sh = want - penaltyOf(r, d.pid, h) - A.stat(r, d.pid, h, 'pt');
+        if (want > 15 || sh < 1 || sh > S.STAT_FIELDS.sh.max) return;
         setStat(r, d.pid, h, 'sh', sh); applyAutoScore(r, d.pid, h);
         save(); render(); return;
       }

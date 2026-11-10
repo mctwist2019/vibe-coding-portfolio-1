@@ -308,6 +308,8 @@ details.adv[open] summary::before { content: '▾ '; }
 .laymap .mk { font-size: 15px; fill: #16211b; stroke: #fff; stroke-width: 3.5px; opacity: .85; }
 .laybtn .zoomhint { position: absolute; left: 4px; bottom: 4px; font-size: 10px; line-height: 16px; padding: 0 5px; border-radius: 8px; background: rgba(255,255,255,.85); color: var(--text); font-weight: 700; }
 .mapzoom { position: fixed; inset: 0; z-index: 60; background: rgba(10, 20, 14, .6); overflow-y: auto; padding: calc(12px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom)); }
+.mapzoom { overscroll-behavior: contain; }
+html.noscroll { overflow: hidden; } /* 약도 창이 열려 있는 동안 뒤 화면 고정 (body에는 걸지 않는다: 위쪽 바가 떨어져 나감) */
 .mapzoom-card { max-width: 440px; margin: 0 auto; background: var(--card); border-radius: 16px; padding: 12px; box-shadow: var(--shadow); }
 .teechips { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 2px 0 10px; font-size: 13px; }
 .teechip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }

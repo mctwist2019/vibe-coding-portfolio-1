@@ -35,7 +35,9 @@ test('course maps: every map belongs to a built-in course and is drawable', () =
       let len = 0;
       for (let i = 0; i + 1 < pts.length; i++) len += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
       assert.ok(Math.abs(len / m.s - white[3]) < white[3] * 0.08, tag + ' scale consistent: ' + Math.round(len / m.s) + ' vs ' + white[3]);
-      (m.cy || []).forEach((q) => assert.ok(q.length === 4 && (q[3] === 'L' || q[3] === 'R') && q[2] > 30, tag + ' carry'));
+      (m.cy || []).forEach((q) => assert.ok(q.length === 4 && (q[3] === 'L' || q[3] === 'R' || q[3] === 'C') && q[2] > 30, tag + ' carry'));
+      // 거리 표시의 숫자는 그림상 그린 중심까지의 거리와 크게 다르지 않아야 한다 (이웃 표시의 숫자가 잘못 붙는 것을 잡는다)
+      (m.m || []).forEach((q) => { const g = Math.hypot(q[0] - m.c[0][0], q[1] - m.c[0][1]) / m.s; assert.ok(q.length === 3 && Math.abs(g - q[2]) <= Math.max(20, 0.15 * q[2]), tag + ' marker ' + q[2] + ' vs drawn ' + Math.round(g)); });
     });
   });
 });

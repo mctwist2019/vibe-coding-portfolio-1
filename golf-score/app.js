@@ -6,6 +6,9 @@
   var A = window.GolfAnalysis;
   var BUILTIN_COURSES = Array.isArray(window.GolfCourses) ? window.GolfCourses : [];
   var COURSE_MAPS = (window.GolfCourseMaps && typeof window.GolfCourseMaps === 'object') ? window.GolfCourseMaps : {};
+  A.setMemoUpgrades(BUILTIN_COURSES.memoUpgrades); // 예전 문장형 메모가 남은 라운드·저장 코스도 키워드로 보이게
+  var KW_MAX = 24; // 공략 키워드 한 개의 최대 길이
+  var KW_SOURCE = '키워드는 공개 후기를 간추린 참고 정보예요.'; // 기본 제공 코스의 키워드 출처
   var KEY = 'golfscore.v1';
   var TEAMS = ['A', 'B', 'C', 'D'];
   var GAME_NAMES = { stroke: '스트로크', stableford: '스테이블포드', skins: '스킨스', match: '매치', nassau: '나소', bestball: '베스트볼', vegas: '라스베가스', bonus: '보너스' };
@@ -64,9 +67,10 @@
     if (!s.clientId || s.clientId.length < 8) s.clientId = S.randomId(10);
     s.me = s.me || null;
     s.meSkipped = s.meSkipped || {};
-    if (s.round) { fillGames(s.round.games = s.round.games || {}); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); }
+    if (s.round) { fillGames(s.round.games = s.round.games || {}); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); delete s.round.courseFrom; }
     s.joining = null;
     s.mapZoom = null;
+    s.kwDraft = null;
     return s;
   }
   var TAB_ID = (function () { try { var t = sessionStorage.getItem('gs.tab'); if (!t) { t = S.randomId(4); sessionStorage.setItem('gs.tab', t); } return t; } catch (e) { return S.randomId(4); } })();
@@ -648,31 +652,29 @@
     return '<svg class="holemap" viewBox="0 0 120 190" role="img" aria-label="홀 약도">' + s + '</svg>';
   }
   /**
-   * 홀 카드 맨 아래의 코스 요약(두 줄 고정): 첫 줄은 '352m · 좌 도그렉 · OB 우', 둘째 줄은 메모(없으면 첫 공략 팁).
+   * 홀 카드 맨 아래의 코스 요약(높이 고정): 첫 줄은 '352m · 좌 도그렉 · OB 우', 그 아래 두 줄까지 공략 키워드(없으면 첫 공략 팁).
    * 내용이 길거나 없어도 높이가 같다 → 동반자가 코스 정보를 넣거나 팁이 바뀌어도 아래 점수 칸이 밀리지 않는다.
    * 누르면 아래 코스 정보 카드(약도·공략 전체)로 이동한다.
    */
   function courseSumInner(r, h) {
-    var labels = A.holeLabels(r, h), memo = A.holeInfo(r, h).memo;
-    var line1 = labels.join(' · '), line2 = memo ? '📝 ' + memo : '';
+    var labels = A.holeLabels(r, h), words = A.memoWords(A.holeInfo(r, h).memo);
+    var line1 = labels.join(' · '), line2 = words.length ? '📝 ' + words.join(A.MEMO_SEP) : '';
     if (!line2 && labels.length) { var tips = A.holeTips(r, h, myPid()); if (tips.length) line2 = '🧭 ' + tips[0]; }
     var none = !line1 && !line2;
-    if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = '거리·위험 요소·메모를 넣으면 약도와 공략 팁이 나와요'; }
-    else if (!line1) line1 = r.course || (h + 1) + '번홀 메모';
+    if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = '거리·위험 요소·키워드를 넣으면 약도와 공략 팁이 나와요'; }
+    else if (!line1) line1 = r.course || (h + 1) + '번홀 키워드';
     return '<span class="ic">🗺️</span><span class="txt"><span class="l1' + (none ? ' none' : '') + '">' + esc(line1) + '</span><span class="l2">' + esc(line2) + '</span></span><span class="go">›</span>';
   }
-  /** 코스 저장 · 네이버 지도 버튼 줄. 코스 이름을 입력하는 동안에도 따로 다시 그려 링크가 현재 이름을 따라가게 한다 */
-  function courseActions(r) {
-    var q = (r.course || '').trim();
-    return '<button class="btn sm" data-action="course-save">이 코스 저장</button>' +
-      (q ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="https://map.naver.com/p/search/' + encodeURIComponent(q + ' 골프') + '">네이버 지도에서 보기 ↗</a>' : '');
-  }
-  /** 코스 정보 중 입력란이 없는 부분(메모·공략·약도). 입력하는 동안이나 동반자가 고쳤을 때 이 영역만 다시 그린다 */
+  /** 코스 정보 중 입력란이 없는 부분(키워드·공략·약도). 입력하는 동안이나 동반자가 고쳤을 때 이 영역만 다시 그린다 */
   function courseLive(r, h, par) {
     var info = A.holeInfo(r, h), open = !!state.courseOpen, lay = courseLayout(r, h);
     var tips = A.holeTips(r, h, myPid());
-    var notes = '';
-    if (info.memo) notes += '<div class="coachline"><span class="ic">📝</span><span>' + esc(info.memo) + '</span></div>';
+    var notes = '', words = open ? [] : A.memoWords(info.memo);
+    // 공략 키워드: 문장 대신 짧은 꼬리표 여러 개 (좁은 칸에서도 잘리지 않고 줄만 바뀐다).
+    // 펼친 상태에서는 바로 아래 편집 칸에 같은 키워드가 있으므로 여기에 또 그리지 않는다 (높이가 고정된 칸을 약도 설명과 공략 팁에 쓴다)
+    if (words.length) notes += '<div class="coachline"><span class="ic">📝</span><span class="kws">' + words.map(function (w) { return '<span class="kw">' + esc(w) + '</span>'; }).join('') + '</span></div>';
+    // 기본 제공 코스의 키워드는 공개 후기를 간추린 것이라는 점을 밝힌다 (직접 넣은 키워드가 섞여 있어도 코스 단위로만 구분한다)
+    var src = words.length && builtinCourse(r.course, r.holes) ? KW_SOURCE : '';
     if (lay) notes += layoutNotes(lay);
     notes += tips.map(function (t) { return '<div class="coachline"><span class="ic">🧭</span><span>' + esc(t) + '</span></div>'; }).join('');
     // 펼친 동안에는 약도 영역을 항상 같은 높이로 그린다(공략 글은 약도 높이 안에서 스크롤) → 위험 요소를 누르거나 거리를 적어도
@@ -681,9 +683,9 @@
       // 코스 안내도 약도가 있는 홀(기본 제공 코스)은 그 그림을, 없으면 입력한 정보로 그린 도식을 보여 준다
       return '<div class="course-view' + (open ? ' fixed' : '') + '">' + (lay ? layoutThumb(lay, h, open ? 171 : 280) : holeMap(info, par)) +
         '<div class="stack grow">' + (notes || '<div class="muted small">위험 요소나 거리를 입력하면 공략 팁이 여기에 나와요.</div>') +
-        '<div class="muted small">' + (lay ? '약도는 코스 안내도를 단순하게 옮긴 그림이에요. 누르면 크게 보여요.' : '약도는 입력한 정보로 그린 그림이에요. 실제 지형과 다를 수 있어요.') + '</div></div></div>';
+        '<div class="muted small">' + (lay ? '약도는 코스 안내도를 단순하게 옮긴 그림이에요. 누르면 크게 보여요.' : '약도는 입력한 정보로 그린 그림이에요. 실제 지형과 다를 수 있어요.') + (src ? ' ' + src : '') + '</div></div></div>';
     }
-    return notes ? '<div class="stack course-notes">' + notes + '</div>' : '';
+    return notes ? '<div class="stack course-notes">' + notes + (src ? '<div class="muted small">' + src + '</div>' : '') + '</div>' : '';
   }
   /**
    * 코스 정보 카드. 점수 칸 '아래'에 둔다: 이 카드는 내용에 따라 높이가 변하는데(공략 팁, 동반자가 실시간으로 넣는 정보, 약도),
@@ -701,45 +703,58 @@
       return '<button type="button" data-action="hi-shape" data-v="' + o[0] + '" class="' + (shape === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
     }).join('') + '</div>';
   }
+  /** 위험 요소 입력: 종류(OB·해저드·벙커)마다 한 줄, 위치(좌·우·그린 쪽)를 같은 자리에 나란히 둔다 */
+  function hazGrid(haz) {
+    return A.HAZ_GROUPS.map(function (g) {
+      function cell(bit, text, full) {
+        var on = !!(haz & bit);
+        return '<button type="button" class="chip tap' + (on ? ' active' : '') + '" data-action="hi-haz" data-bit="' + bit + '" aria-pressed="' + on + '" aria-label="' + full + '">' + text + '</button>';
+      }
+      return '<span class="hg-name">' + g.name + '</span>' + cell(g.l, '좌', g.name + ' 좌') + cell(g.r, '우', g.name + ' 우') +
+        (g.g ? cell(g.g, g.gName, g.gName + ' ' + g.name) : '<span></span>');
+    }).join('');
+  }
+  /** 이 홀에 쓰다 만 키워드 (추가를 누르기 전의 입력란 내용. 다른 곳을 눌러 화면을 다시 그려도 남게 기억해 둔다) */
+  function kwDraft(r, h) { var d = state.kwDraft; return d && d.rid === r.id && d.h === h ? d.v : ''; }
+  /** 공략 키워드 목록 (지우기 버튼이 달린 꼬리표) */
+  function kwChips(r, h) {
+    var words = A.memoWords(A.holeInfo(r, h).memo);
+    if (!words.length) return '<span class="muted small">아직 없어요. 기억할 것을 짧게 하나씩 추가하세요.</span>';
+    return words.map(function (w) {
+      return '<span class="chip kwchip"><span class="t">' + esc(w) + '</span><button type="button" class="x" data-action="kw-del" data-kw="' + esc(w) + '" aria-label="' + esc(w) + ' 지우기">✕</button></span>';
+    }).join('');
+  }
   function courseBlock(r, h, par) {
     var info = A.holeInfo(r, h), open = !!state.courseOpen;
     var html = '<div class="card course" id="course-card">' +
       '<button class="detail-head course-head" data-action="course-toggle" aria-expanded="' + (open ? 'true' : 'false') + '">' +
       '<span class="caret">' + (open ? '▾' : '▸') + '</span><span class="ttl">🗺️ ' + (h + 1) + '번홀 코스 정보</span>' +
-      '<span class="sumtxt' + (r.course ? '' : ' none') + '" id="course-headsum">' + esc(r.course || '거리 · 형태 · 위험 요소 · 메모') + '</span></button>';
+      '<span class="sumtxt' + (r.course ? '' : ' none') + '">' + esc(r.course || '거리 · 형태 · 위험 요소 · 키워드') + '</span></button>';
     html += '<div id="course-live" data-region="course-live">' + courseLive(r, h, par) + '</div>';
     if (open) {
       html += '<div class="course-edit">' +
-        '<div class="field" data-region="ce-name"><label>코스 이름 <span class="muted">(모든 홀 공통)</span></label><input type="text" data-course="name" value="' + esc(r.course || '') + '" maxlength="' + S.COURSE_MAX + '" placeholder="예: 베어크리크 포천 · 베어" autocomplete="off"></div>' +
         '<div class="row top"><div class="field" data-region="ce-dist"><label>' + (h + 1) + '번홀 거리 (m)</label><input type="number" inputmode="numeric" min="0" max="999" data-hi="dist" value="' + (info.dist || '') + '" placeholder="예: 350" class="short"></div>' +
-        '<div class="field grow" id="course-shape" data-region="course-shape">' + shapeField(r, h) + '</div></div>' +
-        '<div class="field"><label>위험 요소 <span class="muted">(해당하는 것 모두)</span></label><div class="chips" data-region="course-haz">' + A.HAZ_LABELS.map(function (e) {
-          return '<button class="chip tap ' + (info.haz & e[0] ? 'active' : '') + '" data-action="hi-haz" data-bit="' + e[0] + '">' + e[1] + '</button>';
-        }).join('') + '</div></div>' +
-        '<div class="field" data-region="ce-memo"><label>공략 메모</label><input type="text" data-hi="memo" value="' + esc(info.memo) + '" maxlength="' + S.MEMO_MAX + '" placeholder="예: 티샷은 우측 벙커 방향, 그린 뒤는 내리막" autocomplete="off"></div>' +
-        '<div class="row" id="course-actions" data-region="ce-actions" style="flex-wrap:wrap">' + courseActions(r) + '</div></div>';
+        '<div class="field grow" data-region="course-shape">' + shapeField(r, h) + '</div></div>' +
+        '<div class="field"><label>위험 요소</label><div class="hazgrid" data-region="course-haz">' + hazGrid(info.haz) + '</div></div>' +
+        '<div class="field"><label>공략 키워드' + (builtinCourse(r.course, r.holes) ? ' <span class="muted">(공개 후기 참고)</span>' : '') + '</label>' +
+        '<div class="chips" data-region="ce-kw">' + kwChips(r, h) + '</div>' +
+        '<div class="kwadd" data-region="ce-kwadd"><input type="text" id="kw-in" data-kwin="1" value="' + esc(kwDraft(r, h)) + '" maxlength="' + KW_MAX + '" placeholder="예: 내리막, 우측 OB" enterkeyhint="done" autocomplete="off" aria-label="추가할 공략 키워드">' +
+        '<button type="button" class="btn sm" data-action="kw-add">추가</button></div></div></div>';
     }
-    if (open) html += '<div class="muted small" style="margin-top:8px">입력한 내용은 함께 입력 중인 동반자 화면에도 바로 반영돼요. 라운드를 마치면 고친 내용이 코스에 저장돼 다음 라운드에서 그대로 불러올 수 있어요.</div>';
+    // 코스 이름은 라운드 설정에서 고친다 (이 카드 머리말에 이미 보이므로 여기서는 입력란을 두지 않는다)
+    if (open) html += '<div class="muted small" style="margin-top:8px">입력한 내용은 함께 입력 중인 동반자 화면에도 바로 반영돼요. ' +
+      ((r.course || '').trim() ? '라운드를 마치면 고친 내용이 코스에 저장돼 다음 라운드에서 그대로 불러올 수 있어요.' : '⚙ 라운드 설정에서 코스 이름을 넣어 두면 라운드를 마칠 때 코스로 저장돼 다음 라운드에서 불러올 수 있어요.') + '</div>';
     return html + '</div>';
   }
-  /** 코스 이름·거리·메모 입력: 저장하고, 입력란은 그대로 둔 채 요약 줄·공략·약도(이름이면 버튼 줄도)만 다시 그린다 */
+  /** 거리 입력: 저장하고, 입력란은 그대로 둔 채 요약 줄·공략·약도만 다시 그린다 */
   function courseInput(el) {
-    var r = state.round; if (!r || state.readOnly) return;
-    var h = r.currentHole, isName = el.dataset.course === 'name';
-    if (isName) S.setKey(r, 'course', el.value);
-    else if (el.dataset.hi === 'dist') setHoleInfo(r, h, 'dist', el.value === '' ? null : Number(el.value));
-    else if (el.dataset.hi === 'memo') setHoleInfo(r, h, 'memo', el.value);
-    else return;
+    var r = state.round; if (!r || state.readOnly || el.dataset.hi !== 'dist') return;
+    var h = r.currentHole;
+    setHoleInfo(r, h, 'dist', el.value === '' ? null : Number(el.value));
     save();
-    var set = function (id, html) { var n = document.getElementById(id); if (n) n.innerHTML = html; return n; };
+    var set = function (id, html) { var n = document.getElementById(id); if (n) n.innerHTML = html; };
     set('course-live', courseLive(r, h, r.pars[h]));
     set('course-sum', courseSumInner(r, h));
-    if (isName) {
-      set('course-shape', shapeField(r, h)); // 이름이 약도가 있는 코스와 같아지거나 달라지면 형태 칸도 바뀐다
-      set('course-actions', courseActions(r));
-      var hs = set('course-headsum', esc(r.course || '거리 · 형태 · 위험 요소 · 메모'));
-      if (hs) hs.className = 'sumtxt' + (r.course ? '' : ' none');
-    }
   }
   /** 기기에 코스 저장 (이름 + 홀 수 기준으로 덮어씀). 새 라운드에서 같은 이름을 고르면 파·핸디캡·홀 정보가 채워진다 */
   function saveCourse(r) {
@@ -764,7 +779,7 @@
     return JSON.stringify(out);
   }
   /**
-   * 라운드를 기록으로 보낼 때의 자동 저장. '이 코스 저장' 버튼과 달리 저장해 둔 코스를 통째로 덮어쓰지 않는다.
+   * 라운드를 기록으로 보낼 때의 자동 저장 (코스를 저장하는 유일한 길). 저장해 둔 코스를 통째로 덮어쓰지 않는다.
    *  - 같은 이름으로 저장한 코스가 없으면 새로 저장한다. 단, 기본 제공 코스와 내용이 같으면 사본을 만들지 않는다
    *    (사본이 생기면 기본 제공 코스를 가려서, 나중에 기본 코스가 바로잡혀도 반영되지 않는다).
    *  - 저장한 코스가 있으면 이번 라운드에서 실제로 고친 칸만 반영한다 (그 칸의 수정 시각이 라운드 생성 시각보다 뒤인 것).
@@ -1072,8 +1087,13 @@
     var r = state.round;
     var html = topbar('라운드 설정', '', backBtn('play', '입력'), statusPill('settings'));
     html += '<div class="screen">';
-    html += '<div class="notice">라운드 중에도 팀·게임·금액을 바꿀 수 있어요. 결과는 즉시 다시 계산되고' + (sharingActive() ? ' <b>함께하는 모든 참가자에게 적용</b>됩니다.' : '.') + '</div>';
-    html += '<div class="card"><h2>라운드 정보</h2><div class="field"><label>이름</label><input type="text" data-bind="round.name" value="' + esc(r.name) + '" maxlength="60"></div></div>';
+    html += '<div class="notice">라운드 중에도 팀·게임·금액을 바꿀 수 있어요. ' + (sharingActive() ? '결과는 즉시 다시 계산되고 <b>함께하는 모든 참가자에게 적용</b>됩니다.' : '결과는 즉시 다시 계산돼요.') + '</div>';
+    html += '<div class="card"><h2>라운드 정보</h2><div class="stack">' +
+      '<div class="field"><label>이름</label><input type="text" data-bind="round.name" value="' + esc(r.name) + '" maxlength="60"></div>' +
+      // 코스 이름은 모든 홀에 공통이라 홀마다 보이는 코스 정보 카드가 아니라 여기서 고친다
+      '<div class="field"><label>코스 이름</label><input type="text" data-bind="round.course" value="' + esc(r.course || '') + '" maxlength="' + S.COURSE_MAX + '" placeholder="예: 베어크리크 포천 · 베어" autocomplete="off"></div>' +
+      '<div class="muted small">코스 이름이 있으면 라운드를 마칠 때 홀 정보(파·거리·위험 요소·키워드)가 이 기기에 코스로 저장돼 다음 라운드에서 불러올 수 있어요.</div>' +
+      '</div></div>';
     html += playersSection('round', r.players, false);
     html += gamesSection('round', r.games, r.holes);
     if (state.setupError) html += '<div class="error">' + state.setupError.map(esc).join('<br>') + '</div>';
@@ -1118,7 +1138,6 @@
       course: cname, holeInfo: saved ? clone(saved.holeInfo || {}) : {}, stats: {},
       players: players, scores: scores, extras: {}, games: clone(d.games), status: 'live', rev: {}, currentHole: 0, createdAt: now
     };
-    if (saved) state.round.courseFrom = cname; // 이 기기에서 불러온 코스로 시작함 (기기 전용 표시, 공유되지 않음)
     // 처음 넣는 값(이름·코스·불러온 파/핸디캡/홀 정보)도 공유 수신 측(setKey)과 같은 규칙으로 정규화 → 호스트와 참여자가 같은 값을 갖도록
     S.allKeys(state.round).forEach(function (k) { if (k === 'meta') return; var v = S.getKey(state.round, k); if (v !== undefined) S.setKey(state.round, k, v); });
     S.stampAll(state.round, now, state.clientId);
@@ -1773,7 +1792,6 @@
     var r = state.round; if (!r) return;
     r.finishedAt = r.finishedAt || Date.now();
     autoSaveCourse(r); // 코스 이름을 넣은 라운드는 코스 정보를 기기에 저장 (이미 저장해 둔 코스에는 이번 라운드에서 고친 칸만 반영)
-    delete r.courseFrom;
     state.history = state.history.filter(function (h) { return h.id !== r.id; });
     state.history.unshift(r);
     if (state.history.length > 50) state.history.length = 50;
@@ -1944,15 +1962,27 @@
       if (!setHoleInfo(r, h, 'z' + bit, (A.holeInfo(r, h).haz & bit) ? null : 1)) return;
       save(); render();
     },
-    'course-save': function () { // 지금 라운드의 파·핸디캡·홀 정보로 코스를 통째로 저장 (자동 저장과 달리 덮어씀)
-      var r = state.round; if (!r) return;
-      var name = (r.course || '').trim();
-      if (!name) { toast('코스 이름을 먼저 입력하세요'); return; }
-      var old = savedCourse(name, r.holes);
-      if (old && r.courseFrom !== name && courseSig(old) !== courseSig(r) &&
-        !confirm("이미 저장한 '" + name + "' 코스가 있어요.\n지금 라운드의 파·핸디캡·홀 정보로 바꿀까요? (저장해 둔 홀 정보는 사라져요)")) return;
-      saveCourse(r); r.courseFrom = name;
-      save(); toast('코스를 저장했어요. 새 라운드에서 불러올 수 있어요');
+    'kw-add': function (d, el, ev) { // 공략 키워드 추가 (쉼표로 나눠 여러 개를 한 번에 넣을 수 있다)
+      var r = state.round; if (!r || state.readOnly) return;
+      var h = r.currentHole, inp = document.getElementById('kw-in');
+      var add = A.memoWords(inp ? inp.value : kwDraft(r, h)).map(function (w) { return w.slice(0, KW_MAX); });
+      if (!add.length) { if (inp) inp.focus(); return; }
+      var words = A.memoWords(A.holeInfo(r, h).memo), n = 0;
+      add.forEach(function (w) { if (words.indexOf(w) < 0) { words.push(w); n++; } });
+      // 메모 한 칸의 길이 제한(공유 규칙)을 넘으면 뒤가 잘려 나가므로 넣지 않고 알려 준다. 쓰던 글은 입력란에 그대로 둔다
+      if (n && words.join(A.MEMO_SEP).length > S.MEMO_MAX) { toast('키워드가 너무 많아요. 안 쓰는 키워드를 지우고 추가해 주세요'); return; }
+      if (n) setHoleInfo(r, h, 'memo', words.join(A.MEMO_SEP)); else toast('이미 있는 키워드예요');
+      state.kwDraft = null;
+      save(); render();
+      if (ev && ev.type === 'keydown') { var again = document.getElementById('kw-in'); if (again) again.focus(); } // 자판으로 이어서 넣는 중이면 입력란에 머문다
+    },
+    'kw-del': function (d) {
+      var r = state.round; if (!r || state.readOnly) return;
+      var h = r.currentHole, words = A.memoWords(A.holeInfo(r, h).memo), i = words.indexOf(d.kw);
+      if (i < 0) return;
+      words.splice(i, 1);
+      setHoleInfo(r, h, 'memo', words.join(A.MEMO_SEP));
+      save(); render();
     },
     'del-course': function () { // 저장한 코스 삭제 (같은 이름의 기본 제공 코스가 있으면 그 값으로 되돌아감)
       var d = state.draft; if (!d) return;
@@ -2052,7 +2082,8 @@
   }
   $app.addEventListener('input', function (ev) {
     var el = ev.target;
-    if (el.dataset && (el.dataset.hi || el.dataset.course)) { courseInput(el); return; }
+    if (el.dataset && el.dataset.hi) { courseInput(el); return; }
+    if (el.dataset && el.dataset.kwin) { var kr = state.round; state.kwDraft = kr ? { rid: kr.id, h: kr.currentHole, v: el.value } : null; return; }
     if (!el.dataset || !el.dataset.bind) return;
     if (el.type === 'checkbox' || el.tagName === 'SELECT') return; // change 이벤트에서 처리
     bindInput(el, false);
@@ -2064,6 +2095,8 @@
   });
   $app.addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter' && ev.target && ev.target.id === 'join-code') { ev.preventDefault(); joinRoom(ev.target.value, 0); }
+    // 키워드 입력란에서 Enter = 추가. 한글 조합 중의 Enter(글자 확정)는 넘긴다
+    if (ev.key === 'Enter' && ev.target && ev.target.id === 'kw-in' && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); actions['kw-add']({}, ev.target, ev); }
   });
   function wakeSession() {
     fgAt = Date.now();

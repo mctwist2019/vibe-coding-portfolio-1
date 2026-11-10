@@ -203,6 +203,81 @@ test('built-in courses are structurally valid and pass sync validation unchanged
   });
 });
 
+test('hole memo as keywords: split on separators, joined with " · ", old sentences fall back to chunks', () => {
+  assert.deepEqual(A.memoWords('좌우 OB · 정면 막창(약 240m) · 내리막'), ['좌우 OB', '정면 막창(약 240m)', '내리막']);
+  assert.deepEqual(A.memoWords('내리막, 우측 OB，그린 빠름、2단 그린;앞바람\n끊어 가기'), ['내리막', '우측 OB', '그린 빠름', '2단 그린', '앞바람', '끊어 가기']);
+  assert.deepEqual(A.memoWords('  내리막 ·· 내리막 ,  '), ['내리막'], 'blank pieces and duplicates are dropped');
+  assert.deepEqual(A.memoWords('1.5단 그린 · 210~260m'), ['1.5단 그린', '210~260m'], 'a period inside a number is not a separator');
+  assert.deepEqual(A.memoWords('티샷은 우측 벙커 방향. 그린 뒤는 내리막.'), ['티샷은 우측 벙커 방향', '그린 뒤는 내리막'], 'sentences written before keywords existed');
+  assert.deepEqual(A.memoWords(''), []);
+  assert.deepEqual(A.memoWords(null), []);
+  assert.deepEqual(A.memoWords(5), ['5']);
+  ['constructor', '__proto__', 'toString'].forEach((w) => assert.deepEqual(A.memoWords(w + ' · ' + w), [w], w));
+  const words = ['좌우 OB', '핀보다 짧게', '약간 오르막'];
+  assert.deepEqual(A.memoWords(words.join(A.MEMO_SEP)), words, 'join → split round trip');
+});
+
+test('hazard labels are grouped by kind (OB · 해저드 · 벙커)', () => {
+  assert.deepEqual(A.hazLabels(0), []);
+  assert.deepEqual(A.hazLabels(1), ['OB 좌']);
+  assert.deepEqual(A.hazLabels(1 | 2), ['OB 좌우']);
+  assert.deepEqual(A.hazLabels(8 | 16), ['해저드 우·그린 앞']);
+  assert.deepEqual(A.hazLabels(16), ['그린 앞 해저드']);
+  assert.deepEqual(A.hazLabels(32 | 64 | 128), ['벙커 좌우·그린 주변']);
+  assert.deepEqual(A.hazLabels(255), ['OB 좌우', '해저드 좌우·그린 앞', '벙커 좌우·그린 주변']);
+  // 입력 칸의 줄(HAZ_GROUPS)은 여덟 개 비트를 빠짐없이 한 번씩 다룬다
+  const bits = [];
+  A.HAZ_GROUPS.forEach((g) => { bits.push(g.l, g.r); if (g.g) bits.push(g.g); });
+  assert.deepEqual(bits.sort((a, b) => a - b), A.HAZ_LABELS.map((e) => e[0]));
+  const r = mk(9, { a: [5] });
+  r.holeInfo = { 0: { dist: 362, shape: 'L', haz: 2 | 32 | 64 | 128 } };
+  assert.deepEqual(A.holeLabels(r, 0), ['362m', '좌 도그렉', 'OB 우', '벙커 좌우·그린 주변']);
+});
+
+test('built-in keyword memos: short keywords, and old sentence memos read as the new keywords', () => {
+  const S = require('../sync.js');
+  const courses = require('../courses.js');
+  const current = new Set();
+  courses.forEach((c) => {
+    Object.keys(c.holeInfo).forEach((h) => {
+      const memo = c.holeInfo[h].memo; if (!memo) return;
+      const tag = c.name + ' #' + (+h + 1);
+      const words = A.memoWords(memo);
+      assert.equal(words.join(A.MEMO_SEP), memo, tag + ' is stored exactly as its keywords joined');
+      assert.ok(words.length >= 1 && words.length <= 5, tag + ' keyword count');
+      words.forEach((w) => assert.ok(w.length <= 24, tag + ' keyword too long: ' + w));
+      assert.ok(memo.length <= S.MEMO_MAX);
+      assert.ok(!/후기 참고/.test(memo), tag + ' no sentence prefix');
+      current.add(memo);
+    });
+  });
+  const up = courses.memoUpgrades;
+  const olds = Object.keys(up);
+  assert.equal(olds.length, current.size, 'one old sentence per current keyword memo');
+  olds.forEach((old) => {
+    assert.match(old, /^후기 참고: /);
+    assert.ok(current.has(up[old]), 'upgrade target is a current built-in memo: ' + up[old]);
+    assert.ok(!current.has(old));
+    const clean = { id: 'r', holes: 9, date: 'd', createdAt: 1, name: 'n', pars: [4, 4, 4, 4, 4, 4, 4, 4, 4], strokeIndex: [1, 2, 3, 4, 5, 6, 7, 8, 9], players: [{ id: 'a', name: 'A', hcp: 0, team: '' }],
+      scores: { a: new Array(9).fill(null) }, extras: {}, games: {}, status: 'live', rev: {}, course: '', holeInfo: { 0: { memo: old } } };
+    S.diffAndStamp(clean, {}, S.createClock(() => 5), 'A');
+    assert.equal(clean.holeInfo[0].memo, old, 'the old sentence is what sync validation stored, so an exact match is possible');
+  });
+  // 읽을 때만 바꾼다: 저장된 값은 그대로, 번역표에 없는 메모(직접 고친 문장)는 건드리지 않는다
+  const r = mk(9, { a: [5] });
+  const old = olds[0];
+  r.holeInfo = { 0: { memo: old }, 1: { memo: old + ' 추가' }, 2: { memo: 'toString' } };
+  try {
+    A.setMemoUpgrades(up);
+    assert.equal(A.holeInfo(r, 0).memo, up[old]);
+    assert.equal(r.holeInfo[0].memo, old);
+    assert.equal(A.holeInfo(r, 1).memo, old + ' 추가');
+    assert.equal(A.holeInfo(r, 2).memo, 'toString', 'inherited object keys are not treated as upgrades');
+    A.setMemoUpgrades(null);
+    assert.equal(A.holeInfo(r, 0).memo, old);
+  } finally { A.setMemoUpgrades(null); }
+});
+
 // ───────────────────────── 코드 리뷰에서 확인된 문제의 회귀 테스트 ─────────────────────────
 test('hole tips: the personal line ignores what is being entered on that hole (score rows must not jump while tapping)', () => {
   // 1번홀 더블보기 뒤 2번홀(파4) 입력 중

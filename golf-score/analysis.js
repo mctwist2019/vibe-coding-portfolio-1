@@ -304,6 +304,40 @@
   /** 위험 요소 비트. 라운드에는 holeInfo[h].haz 비트마스크로 저장하고, 공유할 때는 비트마다 따로 보낸다(sync.js의 hi:<h>:z<비트>) */
   var HAZ = { OB_L: 1, OB_R: 2, WATER_L: 4, WATER_R: 8, WATER_FRONT: 16, BUNKER_L: 32, BUNKER_R: 64, BUNKER_GREEN: 128 };
   var HAZ_LABELS = [[1, 'OB 좌'], [2, 'OB 우'], [4, '해저드 좌'], [8, '해저드 우'], [16, '그린 앞 해저드'], [32, '벙커 좌'], [64, '벙커 우'], [128, '그린 주변 벙커']];
+  /** 위험 요소를 종류별로 묶은 것 (입력 칸의 줄, 요약 라벨). l/r: 좌·우 비트, g: 그린 쪽 비트와 그 위치 이름 */
+  var HAZ_GROUPS = [
+    { name: 'OB', l: 1, r: 2 },
+    { name: '해저드', l: 4, r: 8, g: 16, gName: '그린 앞' },
+    { name: '벙커', l: 32, r: 64, g: 128, gName: '그린 주변' }
+  ];
+  /** 종류별로 묶은 위험 요소 라벨: 1|2 → ['OB 좌우'], 32|64|128 → ['벙커 좌우·그린 주변'], 16 → ['그린 앞 해저드'] */
+  function hazLabels(haz) {
+    var out = [];
+    HAZ_GROUPS.forEach(function (g) {
+      var side = (haz & g.l) && (haz & g.r) ? '좌우' : (haz & g.l) ? '좌' : (haz & g.r) ? '우' : '';
+      var green = g.g && (haz & g.g) ? g.gName : '';
+      if (side && green) out.push(g.name + ' ' + side + '·' + green);
+      else if (side) out.push(g.name + ' ' + side);
+      else if (green) out.push(green + ' ' + g.name);
+    });
+    return out;
+  }
+  /**
+   * 공략 메모는 짧은 키워드 여러 개로 다룬다. 저장·공유는 예전처럼 문자열 한 칸(memo)이고 키워드 사이를 ' · '로 잇는다
+   * (옛 버전 기기에는 그 문자열이 그대로 보인다). 쉼표·가운뎃점·줄바꿈, 문장 끝의 마침표에서 나누므로 예전에 문장으로 적어 둔 메모도 토막으로 보인다.
+   */
+  var MEMO_SEP = ' · ';
+  function memoWords(memo) {
+    var out = [], seen = {};
+    String(memo === null || memo === undefined ? '' : memo).split(/[·,，、;\r\n]+|\.(?=\s|$)/).forEach(function (w) {
+      w = w.replace(/\s+/g, ' ').trim();
+      if (w && !seen['k' + w]) { seen['k' + w] = 1; out.push(w); }
+    });
+    return out;
+  }
+  /** 메모 번역표 (앱이 등록): 기본 제공 코스의 예전 문장형 메모 → 지금의 키워드 메모. 그 문장이 그대로 남은 칸만 읽을 때 바꿔 준다 */
+  var memoUpgrades = {};
+  function setMemoUpgrades(map) { memoUpgrades = map && typeof map === 'object' ? map : {}; }
   var SHAPE_LABELS = { S: '직선', L: '좌 도그렉', R: '우 도그렉' };
 
   /** 한 홀의 코스 정보 (없으면 빈 값) */
@@ -318,21 +352,22 @@
     var dist = num(i.dist), haz = num(i.haz);
     var shape = shapeSource ? shapeSource(round, h) : undefined;
     if (shape === undefined) shape = i.shape;
+    var memo = typeof i.memo === 'string' ? i.memo : '';
+    if (memo && Object.prototype.hasOwnProperty.call(memoUpgrades, memo) && typeof memoUpgrades[memo] === 'string') memo = memoUpgrades[memo];
     return {
       dist: dist !== null && dist > 0 ? dist : null,
       shape: shape === 'S' || shape === 'L' || shape === 'R' ? shape : null,
       haz: haz !== null && haz > 0 ? haz : 0,
-      memo: typeof i.memo === 'string' ? i.memo : ''
+      memo: memo
     };
   }
   function hasHoleInfo(round, h) { var i = holeInfo(round, h); return !!(i.dist || i.shape || i.haz || i.memo); }
-  /** 한 줄 요약에 쓸 라벨들: ['352m', '좌 도그렉', 'OB 좌', …] */
+  /** 한 줄 요약에 쓸 라벨들: ['352m', '좌 도그렉', 'OB 좌우', '벙커 우·그린 주변', …] (위험 요소는 종류별로 묶는다) */
   function holeLabels(round, h) {
     var i = holeInfo(round, h), out = [];
     if (i.dist) out.push(i.dist + 'm');
     if (i.shape) out.push(SHAPE_LABELS[i.shape]);
-    HAZ_LABELS.forEach(function (e) { if (i.haz & e[0]) out.push(e[1]); });
-    return out;
+    return out.concat(hazLabels(i.haz));
   }
   /**
    * 입력된 코스 정보(와 오늘의 내 기록)로 만드는 홀 공략 팁. 정보가 없으면 빈 배열.
@@ -420,6 +455,7 @@
 
   return {
     OB_COST: OB_COST, HZ_COST: HZ_COST, HAZ: HAZ, HAZ_LABELS: HAZ_LABELS, SHAPE_LABELS: SHAPE_LABELS, setShapeSource: setShapeSource,
+    HAZ_GROUPS: HAZ_GROUPS, hazLabels: hazLabels, MEMO_SEP: MEMO_SEP, memoWords: memoWords, setMemoUpgrades: setMemoUpgrades,
     stat: stat, playOrder: playOrder, playerStats: playerStats, roundStatus: roundStatus, coach: coach, teeMissSide: teeMissSide,
     holeInfo: holeInfo, hasHoleInfo: hasHoleInfo, holeLabels: holeLabels, holeTips: holeTips,
     fmtAvg: fmtAvg

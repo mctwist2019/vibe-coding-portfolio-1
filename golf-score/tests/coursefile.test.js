@@ -111,17 +111,41 @@ test('course file: the map accepts numbers only, within the drawing area', () =>
   assert.equal(S.readCourseFile(Object.assign(creekFile(), { map: 'x' })).ok, false);
 });
 
-test('course folder: the shipped files are valid and equal the built-in courses', () => {
+// 코스 폴더에 든 실제 파일의 내용을 여기서 못 박지 않는다: 그 파일들은 배포자가 GitHub에서 지우거나 바꿀 수 있고,
+// 시험이 그 때문에 실패하면 앱 배포 전체가 막힌다. 대신 꺼내기 도구가 만드는 파일이 기본 제공 자료와 같은지 본다
+test('built-in course export: the files written by the export tool equal the built-in courses', () => {
+  const { exportTo, UPDATED } = require('../tools/export-builtin-courses.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-'));
+  try {
+    const files = exportTo(dir);
+    assert.equal(files.length, courses.length);
+    files.forEach((file) => {
+      const r = S.readCourseFile(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')));
+      assert.equal(r.ok, true, file);
+      const c = courses.find((x) => x.name === r.course.name);
+      assert.ok(c, file + ' names a built-in course');
+      assert.deepEqual([r.course.pars, r.course.strokeIndex, r.course.holeInfo], [c.pars, c.strokeIndex, c.holeInfo], file);
+      assert.deepEqual(r.course.map, maps[c.name] || null, file);
+      assert.equal(r.course.updated, UPDATED);
+    });
+    // 앱이 아는 기본 제공 자료의 기준일과 같아야 목록에서 '기본 포함'으로 보인다
+    const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+    assert.equal((/var SHIPPED_UPDATED = '(\d{4}-\d{2}-\d{2})'/.exec(app) || [])[1], UPDATED);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('course folder: whatever files are in the real folder, the list is built and lists only valid courses', () => {
   const dir = path.join(__dirname, '..', 'courses');
-  ['bearcreek-pocheon-bear-18.json', 'bearcreek-pocheon-creek-18.json'].forEach((file) => {
-    const r = S.readCourseFile(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')));
-    assert.equal(r.ok, true, file);
-    const c = courses.find((x) => x.name === r.course.name);
-    assert.ok(c, file + ' names a built-in course');
-    assert.deepEqual([r.course.pars, r.course.strokeIndex, r.course.holeInfo], [c.pars, c.strokeIndex, c.holeInfo], file);
-    assert.deepEqual(r.course.map, maps[c.name] || null, file);
-    assert.equal(r.course.updated, '2026-11-11');
+  const res = build(dir); // 올바르지 않은 파일은 건너뛸 뿐 실패하지 않는다
+  assert.equal(Array.isArray(res.index.courses), true);
+  res.index.courses.forEach((e) => {
+    const r = S.readCourseFile(JSON.parse(fs.readFileSync(path.join(dir, e.file), 'utf8').replace(/^\uFEFF/, '')));
+    assert.equal(r.ok, true, e.file);
+    assert.deepEqual([r.course.name, r.course.holes, !!r.course.map], [e.name, e.holes, e.map], e.file);
   });
+  // 폴더가 비어 있어도, 본보기 파일이 지워져도 목록은 만들어진다
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-'));
+  try { assert.deepEqual(build(empty), { index: { v: 1, courses: [] }, skipped: [] }); } finally { fs.rmSync(empty, { recursive: true, force: true }); }
 });
 
 test('course list builder: valid files are listed, broken ones are skipped, the newest of a duplicate wins', () => {
@@ -154,6 +178,21 @@ test('course list builder: valid files are listed, broken ones are skipped, the 
     // 이름 순 (같은 이름이면 홀 수 순)
     const names = res.index.courses.map((c) => c.name);
     assert.deepEqual(names, names.slice().sort((a, b) => a.localeCompare(b, 'ko')));
+    // 내용 지문: 같은 날 고쳐 올린 자료를 앱이 알아보는 데 쓴다. 내용이 같으면 같고(파일 모양만 다른 것 포함), 내용이 달라지면 달라진다
+    const sigs = () => Object.fromEntries(build(dir).index.courses.map((c) => [c.file, c.sig]));
+    const before = sigs();
+    Object.keys(before).forEach((f) => assert.match(before[f], /^[0-9a-f]{16}$/, f));
+    assert.equal(new Set(Object.values(before)).size, 4, 'different courses have different fingerprints');
+    put('creek.json', JSON.stringify(creekFile(), null, 2) + '\n\n');
+    assert.deepEqual(sigs(), before, 'the same course written with other spacing keeps its fingerprint');
+    const fixed = creekFile(); fixed.pars[0] = fixed.pars[0] === 4 ? 5 : 4; // 날짜는 그대로, 1번홀 파만 고침
+    put('creek.json', fixed);
+    const after = sigs();
+    assert.notEqual(after['creek.json'], before['creek.json'], 'a correction changes the fingerprint even when the date is the same');
+    assert.deepEqual([after['bom.json'], after['nine.json'], after['bear-newer.json']], [before['bom.json'], before['nine.json'], before['bear-newer.json']]);
+    const memo = creekFile(); memo.holeInfo[0].memo = '고친 키워드';
+    put('creek.json', memo);
+    assert.notEqual(sigs()['creek.json'], before['creek.json']);
     // 빈 폴더, 없는 폴더
     assert.deepEqual(build(path.join(dir, 'nope')), { index: { v: 1, courses: [] }, skipped: [] });
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

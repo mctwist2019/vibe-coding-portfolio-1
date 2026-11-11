@@ -29,7 +29,11 @@
   // 코스 목록에서 받았거나 파일로 받은 코스. 기본 제공 코스와 똑같이 쓰인다: 새 라운드에서 고르면 파·핸디캡·홀 정보가 채워지고,
   // 약도가 들어 있으면 홀 약도가 나온다. 약도가 커서(18홀에 수만 자) 자주 저장하는 앱 상태(golfscore.v1)와 따로 둔다
   var LIB_KEY = 'golfscore.lib.v1', LIB_MAX = 40;
+  // 받은 코스 전체가 차지할 수 있는 크기(글자 수)와, 코스를 받은 뒤에도 점수를 저장할 자리로 남아 있어야 하는 여유.
+  // 기기 저장소는 점수·기록과 함께 쓴다(브라우저에 따라 약 250만~500만 자): 받은 코스가 다 차지해서 점수를 저장하지 못하는 일이 없게 한다
+  var LIB_BUDGET = 1500000, LIB_HEADROOM = 250000;
   var SHIPPED_UPDATED = '2026-11-11'; // 앱에 들어 있는 기본 제공 코스 자료의 기준일 (코스 폴더의 같은 코스가 이보다 새로우면 목록에 '새로 받기'가 뜬다)
+  var SIG_RE = /^[0-9a-f]{8,64}$/; // 코스 목록이 코스마다 붙이는 내용 지문 (tools/build-course-index.js)
   var lib = loadLib();
   function loadLib() {
     var out = { courses: [] }, raw = null;
@@ -37,32 +41,58 @@
     if (raw && Array.isArray(raw.courses)) raw.courses.slice(0, LIB_MAX).forEach(function (c) {
       // 저장해 둔 것도 읽을 때 다시 검증한다: 약도의 숫자는 화면에 그대로 그려지므로, 어떤 경로로든 바뀐 값이 섞여 들지 않게
       var r = c && typeof c === 'object' ? S.readCourseFile(S.makeCourseFile(c, c.map, { note: c.note, updated: c.updated })) : null;
-      if (r && r.ok && !out.courses.some(function (x) { return x.name === r.course.name && x.holes === r.course.holes; })) {
-        r.course.from = c.from === 'file' ? 'file' : 'list'; r.course.at = Number(c.at) || 0; out.courses.push(r.course);
+      // 앱에 들어 있는 자료보다 오래된 것은 버린다 (staleCopy)
+      if (r && r.ok && !staleCopy(r.course) && !out.courses.some(function (x) { return x.name === r.course.name && x.holes === r.course.holes; })) {
+        r.course.from = c.from === 'file' ? 'file' : 'list'; r.course.at = Number(c.at) || 0;
+        if (typeof c.sig === 'string' && SIG_RE.test(c.sig)) r.course.sig = c.sig;
+        out.courses.push(r.course);
       }
     });
     return out;
   }
-  function saveLib() { try { localStorage.setItem(LIB_KEY, JSON.stringify({ v: 1, courses: lib.courses })); return true; } catch (e) { return false; } }
+  function libText(list) { return JSON.stringify({ v: 1, courses: list }); }
+  function saveLib() { try { localStorage.setItem(LIB_KEY, libText(lib.courses)); return true; } catch (e) { return false; } }
+  /** 받은 코스를 저장한 뒤에도 점수를 저장할 자리가 남아 있는가 */
+  function hasHeadroom() {
+    var k = LIB_KEY + '.probe';
+    try { localStorage.setItem(k, new Array(LIB_HEADROOM + 1).join('x')); localStorage.removeItem(k); return true; }
+    catch (e) { try { localStorage.removeItem(k); } catch (e2) { /* 저장소를 못 쓰는 환경 */ } return false; }
+  }
   function libCourse(name, holes) {
     name = (name || '').trim();
     for (var i = 0; i < lib.courses.length; i++) if (lib.courses[i].name === name && lib.courses[i].holes === holes) return lib.courses[i];
     return null;
   }
-  /** 받은 코스를 보관함에 넣는다 (같은 이름·홀 수가 있으면 바꾼다). 기기 저장 공간이 모자라면 넣지 않고 false */
-  function installCourse(course, from) {
-    var prev = lib.courses;
-    lib.courses = [Object.assign({}, course, { from: from === 'file' ? 'file' : 'list', at: Date.now() })]
-      .concat(prev.filter(function (c) { return !(c.name === course.name && c.holes === course.holes); })).slice(0, LIB_MAX);
-    if (saveLib()) return true;
-    lib.courses = prev;
-    return false;
+  /**
+   * 받은 코스를 보관함에 넣는다 (같은 이름·홀 수가 있으면 바꾼다) → 넣었으면 '', 못 넣었으면 이유: 'full'(보관함이 가득 참) | 'space'(기기 저장 공간 부족).
+   * 가득 찼을 때 오래된 코스를 밀어내지 않는다: 쓰고 있는 코스가 말없이 사라지지 않게, 지울 코스는 사용자가 고른다.
+   * sig는 코스 목록에서 받을 때 목록에 적혀 있던 내용 지문 (같은 날 고쳐 올린 자료를 알아보는 데 쓴다)
+   */
+  function installCourse(course, from, sig) {
+    var prev = lib.courses, entry = Object.assign({}, course, { from: from === 'file' ? 'file' : 'list', at: Date.now() });
+    if (typeof sig === 'string' && SIG_RE.test(sig)) entry.sig = sig;
+    var next = [entry].concat(prev.filter(function (c) { return !(c.name === course.name && c.holes === course.holes); }));
+    if (next.length > LIB_MAX || libText(next).length > LIB_BUDGET) return 'full';
+    lib.courses = next;
+    if (saveLib() && hasHeadroom()) return '';
+    lib.courses = prev; saveLib();
+    return 'space';
   }
   function removeLibCourse(name, holes) { lib.courses = lib.courses.filter(function (c) { return !(c.name === name && c.holes === holes); }); saveLib(); }
   /** 앱에 들어 있는 기본 제공 코스 */
   function shippedCourse(name, holes) {
     name = (name || '').trim();
     return BUILTIN_COURSES.filter(function (c) { return c.name === name && c.holes === holes; })[0] || null;
+  }
+  /** 앱에 들어 있는 코스의 자료 기준일 (코스에 따로 적혀 있으면 그 날짜) */
+  function shippedDate(c) { return c && typeof c.updated === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.updated) ? c.updated : SHIPPED_UPDATED; }
+  /**
+   * 앱에 들어 있는 자료보다 오래된 코스 자료인가. 받은 코스는 앱에 들어 있는 같은 코스보다 먼저 쓰이므로,
+   * 앱이 더 새 자료와 함께 갱신된 뒤에는 예전에 받아 둔 것이 새 자료를 가리지 않게 한다 (날짜가 같으면 받은 것을 그대로 쓴다)
+   */
+  function staleCopy(course) {
+    var sc = shippedCourse(course.name, course.holes);
+    return !!sc && (course.updated || '') < shippedDate(sc);
   }
   /** 이 코스의 홀 약도 배열 (없으면 null). 받은 코스에 약도가 있으면 그것, 아니면 앱에 들어 있는 약도 */
   function courseMapOf(name, holes) {
@@ -76,10 +106,11 @@
   var KW_MAX = 24; // 공략 키워드 한 개의 최대 길이
   /**
    * 기본 제공 코스의 키워드(와 OB 위치)는 공개 후기를 간추린 것이라는 표시. 그 홀의 키워드가 기본 제공 값 그대로일 때만 붙인다
-   * (직접 넣거나 고친 키워드에 '후기에서 왔다'고 하지 않는다). 예전 문장형 메모가 남아 있는 칸도 기본 제공 값으로 본다
+   * (직접 넣거나 고친 키워드에 '후기에서 왔다'고 하지 않는다). 예전 문장형 메모가 남아 있는 칸도 기본 제공 값으로 본다.
+   * 받은 코스의 키워드는 누가 어떻게 적은 것인지 알 수 없으므로 붙이지 않는다: 앱에 들어 있는 코스의 값과 견준다
    */
   function kwSource(r, h) {
-    var bi = builtinCourse(r.course, r.holes), raw = r.holeInfo && r.holeInfo[h] && r.holeInfo[h].memo;
+    var bi = shippedCourse(r.course, r.holes), raw = r.holeInfo && r.holeInfo[h] && r.holeInfo[h].memo;
     var mine = bi && bi.holeInfo && bi.holeInfo[h], up = BUILTIN_COURSES.memoUpgrades || {};
     if (!bi || !raw || !(mine && mine.memo === raw) && !Object.prototype.hasOwnProperty.call(up, raw)) return '';
     return (mine && (mine.haz & 3) ? '키워드와 OB 위치는' : '키워드는') + ' 공개 후기를 간추린 참고 정보예요.';
@@ -244,7 +275,7 @@
     syncRound();
     state.hlc = clock.peek();
     try { localStorage.setItem(KEY, JSON.stringify(state)); saveFailed = false; }
-    catch (e) { if (!saveFailed) { saveFailed = true; setTimeout(function () { toast('기기 저장 공간이 부족해 저장하지 못했어요. 홈에서 오래된 기록을 지워 주세요.'); }, 0); } }
+    catch (e) { if (!saveFailed) { saveFailed = true; setTimeout(function () { toast('기기 저장 공간이 부족해 저장하지 못했어요. 홈에서 오래된 기록을 지워 주세요.' + (lib.courses.length ? ' 골프장 받기에서 받은 코스를 지워도 돼요.' : '')); }, 0); } }
   }
   resetBaseline();
 
@@ -1342,13 +1373,17 @@
           return '<button class="chip tap ' + ((d.course || '').trim() === c.name ? 'active' : '') + '" data-action="pick-course" data-name="' + esc(c.name) + '">' + esc(c.name) + '</button>';
         }).join('') + '</div>';
       })() +
+      (function () { // 받은 코스 중 홀 수가 달라 위에 나오지 않는 것이 있으면 알려 준다 (받았는데 안 보여서 못 받은 줄 아는 일이 없게)
+        var other = d.holes === 18 ? 9 : 18, n = lib.courses.filter(function (c) { return c.holes === other; }).length;
+        return n ? '<div class="small muted" data-note="otherholes" style="margin-top:6px">받은 ' + other + '홀 코스 ' + n + '개는 홀 수를 ' + other + '홀로 바꾸면 나와요.</div>' : '';
+      })() +
       '<button class="btn sm" data-action="open-courses" data-back="setup" style="margin-top:8px">📥 다른 골프장 받기</button></div>' +
       '<div class="muted small">' + (findCourse(d.course, d.holes) ? (isBuiltinCourse(d.course, d.holes) ? (libCourse(d.course, d.holes)
           ? (courseMapOf(d.course, d.holes) ? '받은 코스예요. 파·핸디캡·홀 정보와 홀 약도가 채워지고, 파·핸디캡은 입력 화면에서 바로 고칠 수 있어요.'
             : '받은 코스예요. 파·핸디캡·홀 정보가 채워지고, 현장과 다르면 입력 화면에서 바로 고칠 수 있어요.')
           : courseMapOf(d.course, d.holes)
           ? '공개 자료를 정리한 기본 제공 코스예요. 파·핸디캡·거리(화이트티)와 홀 약도·공략 키워드가 채워지고, 파·핸디캡은 입력 화면에서 바로 고칠 수 있어요.'
-          : '공개 자료를 정리한 기본 제공 코스예요. 파·핸디캡·거리(화이트티)가 채워지고, 현장 스코어카드와 다르면 입력 화면에서 바로 고칠 수 있어요.') : '내가 저장한 코스의 파·핸디캡·홀 정보로 시작해요. <button class="btn sm ghost" data-action="del-course">' + (builtinCourse(d.course, d.holes) ? '기본 제공 값으로 되돌리기' : '저장한 코스 삭제') + '</button>') : '파/핸디캡 인덱스는 기본값(파72)으로 시작하고, 스코어 입력 화면에서 홀마다 파·거리·위험 요소·키워드를 넣을 수 있어요.') + '</div></div></div>';
+          : '공개 자료를 정리한 기본 제공 코스예요. 파·핸디캡·거리(화이트티)가 채워지고, 현장 스코어카드와 다르면 입력 화면에서 바로 고칠 수 있어요.') : '내가 저장한 코스의 파·핸디캡·홀 정보로 시작해요. <button class="btn sm ghost" data-action="del-course">' + (libCourse(d.course, d.holes) ? '받은 값으로 되돌리기' : shippedCourse(d.course, d.holes) ? '기본 제공 값으로 되돌리기' : '저장한 코스 삭제') + '</button>') : '파/핸디캡 인덱스는 기본값(파72)으로 시작하고, 스코어 입력 화면에서 홀마다 파·거리·위험 요소·키워드를 넣을 수 있어요.') + '</div></div></div>';
     html += playersSection('draft', d.players, true);
     html += '<h2 style="margin:4px 2px -4px;font-size:16px">게임 & 정산</h2>';
     html += gamesSection('draft', d.games, d.holes);
@@ -2230,16 +2265,31 @@
       if (!name || (e.holes !== 9 && e.holes !== 18)) return;
       out.push({ file: e.file, name: name, holes: e.holes, map: e.map === true,
         updated: typeof e.updated === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.updated) ? e.updated : '',
-        note: typeof e.note === 'string' ? e.note.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) : '' });
+        note: typeof e.note === 'string' ? e.note.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) : '',
+        sig: typeof e.sig === 'string' && SIG_RE.test(e.sig) ? e.sig : '' });
     });
     return out;
+  }
+  /**
+   * 코스 폴더의 파일을 글로 받는다 → Promise<string>. 시간 제한이 있다: 응답이 오다가 멈춰도(신호가 약한 골프장 등)
+   * 끝나지 않는 요청 때문에 "받는 중…"·"새로 고침" 단추가 계속 잠겨 있지 않게 한다
+   */
+  var FETCH_MS = 15000;
+  function fetchText(url) {
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null, timer = null;
+    var work = Promise.resolve().then(function () { return fetch(url, ctl ? { cache: 'no-cache', signal: ctl.signal } : { cache: 'no-cache' }); })
+      .then(function (res) { if (!res.ok) throw new Error('http ' + res.status); return res.text(); });
+    var limit = new Promise(function (resolve, reject) {
+      timer = setTimeout(function () { if (ctl) { try { ctl.abort(); } catch (e) { /* 이미 끝남 */ } } reject(new Error('timeout')); }, FETCH_MS);
+    });
+    return Promise.race([work, limit]).then(function (t) { clearTimeout(timer); return t; }, function (e) { clearTimeout(timer); throw e; });
   }
   function loadCourseIndex() {
     if (courseIndex.pending) return courseIndex.pending;
     courseIndex.state = 'loading';
-    courseIndex.pending = fetch(COURSE_DIR + 'index.json', { cache: 'no-cache' })
-      .then(function (res) { if (!res.ok) throw new Error('http ' + res.status); return res.json(); })
-      .then(function (j) { courseIndex.list = cleanIndex(j); courseIndex.state = 'ok'; }, function () { courseIndex.state = 'error'; })
+    courseIndex.pending = fetchText(COURSE_DIR + 'index.json')
+      .then(function (text) { courseIndex.list = cleanIndex(JSON.parse(text)); courseIndex.state = 'ok'; })
+      .catch(function () { courseIndex.state = 'error'; })
       .then(function () { courseIndex.pending = null; if (state.view === 'courses') render(); });
     return courseIndex.pending;
   }
@@ -2251,23 +2301,41 @@
     var r = S.readCourseFile(obj);
     if (!r.ok) return r;
     if (entry && (r.course.name !== entry.name || r.course.holes !== entry.holes)) return { ok: false, why: 'format' };
-    if (!installCourse(r.course, from)) return { ok: false, why: 'space' };
+    if (staleCopy(r.course)) return { ok: false, why: 'older' };
+    var bad = installCourse(r.course, from, entry ? entry.sig : '');
+    if (bad) return { ok: false, why: bad };
     return { ok: true, course: r.course };
   }
-  /** 목록의 코스 하나를 받아 보관함에 넣는다 → Promise<{ ok, course } | { ok: false, why }> */
+  /** 목록의 코스 하나를 받아 보관함에 넣는다 → Promise<{ ok, course } | { ok: false, why }> (거부되지 않는다) */
   function fetchCourse(entry) {
-    return fetch(COURSE_DIR + encodeURIComponent(entry.file), { cache: 'no-cache' })
-      .then(function (res) { if (!res.ok) throw new Error('http ' + res.status); return res.text(); })
-      .then(function (text) { return takeCourseText(text, 'list', entry); }, function () { return { ok: false, why: 'net' }; });
+    return fetchText(COURSE_DIR + encodeURIComponent(entry.file))
+      .then(function (text) { return takeCourseText(text, 'list', entry); }, function () { return { ok: false, why: 'net' }; })
+      .catch(function () { return { ok: false, why: 'bad' }; });
   }
   var COURSE_WHY = { net: '받지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.', size: '파일이 너무 커서 받을 수 없어요.', format: '코스 파일이 아니에요.',
-    newer: '이 파일은 앱을 최신 버전으로 업데이트해야 받을 수 있어요.', space: '기기 저장 공간이 부족해 받지 못했어요.' };
-  function courseWhy(why) { return COURSE_WHY[why] || '코스 파일의 내용이 올바르지 않아 받지 못했어요.'; }
-  /** 목록 항목의 상태: new(받을 수 있음) | have(받음) | update(새 자료가 있음) | shipped(앱에 기본으로 들어 있음) */
+    newer: '이 파일은 앱을 최신 버전으로 업데이트해야 받을 수 있어요.',
+    space: '기기 저장 공간이 부족해 받지 못했어요. 오래된 기록이나 안 쓰는 받은 코스를 지운 뒤 다시 받아 주세요.',
+    full: '받은 코스가 가득 찼어요. 아래 "이 폰의 코스"에서 안 쓰는 받은 코스를 지운 뒤 다시 받아 주세요.',
+    older: '앱에 이미 더 새로운 자료가 들어 있는 코스예요.' };
+  function courseWhy(why) { return Object.prototype.hasOwnProperty.call(COURSE_WHY, why) ? COURSE_WHY[why] : '코스 파일의 내용이 올바르지 않아 받지 못했어요.'; }
+  /** 받았다는 알림. 새 라운드 화면이 이 코스와 다른 홀 수로 열릴 때는(지난 라운드가 9홀이었던 경우 등) 홀 수를 바꾸라고 알려 준다 */
+  function gotCourseMsg(c) {
+    var next = state.courseBack === 'setup' && state.draft ? state.draft.holes : state.round ? state.round.holes : state.history && state.history[0] ? state.history[0].holes : 18;
+    return "'" + c.name + "' 코스를 받았어요. " + (c.holes === next ? '새 라운드의 "코스 불러오기"에서 고르세요.' : '새 라운드에서 홀 수를 ' + c.holes + '홀로 바꾸면 "코스 불러오기"에 나와요.');
+  }
+  /**
+   * 목록 항목의 상태: new(받을 수 있음) | have(받음) | update(새 자료가 있음) | shipped(앱에 기본으로 들어 있음).
+   * 새 자료: 목록의 날짜가 이 폰의 것보다 늦거나, 날짜는 같은데 목록에서 받을 때의 내용 지문과 달라졌을 때 (같은 날 고쳐 올린 자료).
+   * 이 폰의 것이 더 새로우면(파일로 따로 받은 경우 등) 예전 자료로 되돌리자고 하지 않는다
+   */
   function indexState(e) {
-    var lc = libCourse(e.name, e.holes);
-    if (lc) return (lc.updated || '') === (e.updated || '') ? 'have' : 'update';
-    if (shippedCourse(e.name, e.holes)) return e.updated > SHIPPED_UPDATED ? 'update' : 'shipped';
+    var lc = libCourse(e.name, e.holes), sc;
+    if (lc) {
+      var a = e.updated || '', b = lc.updated || '';
+      return a > b || (a === b && e.sig && lc.sig && e.sig !== lc.sig) ? 'update' : 'have';
+    }
+    sc = shippedCourse(e.name, e.holes);
+    if (sc) return (e.updated || '') > shippedDate(sc) ? 'update' : 'shipped';
     return 'new';
   }
   /** 이 폰에 있는 코스 전부: 내가 고쳐 저장한 것, 받은 것, 앱에 들어 있는 것 (같은 이름·홀 수는 앞의 것 하나만) */
@@ -2276,7 +2344,7 @@
     function add(c, kind) {
       if (!c || !c.name || (c.holes !== 9 && c.holes !== 18) || !Array.isArray(c.pars) || c.pars.length !== c.holes) return;
       var k = c.holes + '|' + c.name; if (seen[k]) return; seen[k] = 1;
-      out.push({ name: c.name, holes: c.holes, kind: kind, map: !!courseMapOf(c.name, c.holes) });
+      out.push({ name: c.name, holes: c.holes, kind: kind, map: !!courseMapOf(c.name, c.holes), got: !!libCourse(c.name, c.holes) });
     }
     (state.courses || []).forEach(function (c) { add(c, 'mine'); });
     lib.courses.forEach(function (c) { add(c, 'lib'); });
@@ -2305,20 +2373,20 @@
       }).join('');
     }
     html += '<div class="row" style="margin-top:10px"><button class="btn sm" data-action="lib-refresh"' + (courseIndex.state === 'loading' ? ' disabled' : '') + '>새로 고침</button></div>' +
-      '<div class="muted small" style="margin-top:8px">받은 골프장은 새 라운드의 "코스 불러오기"에 나와요. 고르면 파·핸디캡·홀 정보가 채워지고, 약도가 있는 골프장은 홀 약도가 나옵니다.</div></div>';
-    // 2. 파일로 받기
+      '<div class="muted small" style="margin-top:8px">받은 골프장은 새 라운드의 "코스 불러오기"에 나와요(라운드의 홀 수와 같은 코스만 나옵니다). 고르면 파·핸디캡·홀 정보가 채워지고, 약도가 있는 골프장은 홀 약도가 나옵니다.</div></div>';
+    // 2. 파일로 받기. 파일 입력 자체는 화면 밖에 하나만 있다 (courseFileInput): 여기서는 그것을 여는 단추만 그린다
     html += '<div class="card"><h2>파일로 받기</h2><div class="muted small">다른 사람이 보내 준 코스 파일(.json)을 열면 이 폰에 그 코스가 들어와요.</div>' +
-      '<label class="btn block filebtn" style="margin-top:10px">📂 코스 파일 열기<input type="file" id="course-file" accept=".json,application/json,text/plain"></label></div>';
+      '<label class="btn block filebtn" for="course-file" role="button" tabindex="0" style="margin-top:10px">📂 코스 파일 열기</label></div>';
     // 3. 이 폰의 코스: 보내기 · 삭제
     var mine = deviceCourses();
     html += '<div class="card"><h2>이 폰의 코스 <span class="hint">보내기 · 삭제</span></h2>' + mine.map(function (c) {
-      var tag = c.kind === 'mine' ? '내가 저장한 코스' : c.kind === 'lib' ? '받은 코스' : '기본 포함';
+      var tag = c.kind === 'mine' ? (c.got ? '받은 코스 · 내가 고쳐 저장함' : '내가 저장한 코스') : c.kind === 'lib' ? '받은 코스' : '기본 포함';
       return '<div class="histrow"><div class="grow"><div class="t">' + esc(c.name) + '</div><div class="s">' + c.holes + '홀 · ' + tag + (c.map ? ' · 약도 있음' : '') + '</div></div>' +
         '<button class="btn sm" data-action="course-send" data-name="' + esc(c.name) + '" data-holes="' + c.holes + '">보내기</button>' +
-        (c.kind === 'lib' ? '<button class="btn sm ghost danger" data-action="lib-del" data-name="' + esc(c.name) + '" data-holes="' + c.holes + '">삭제</button>' : '') + '</div>';
+        (c.got ? '<button class="btn sm ghost danger" data-action="lib-del" data-name="' + esc(c.name) + '" data-holes="' + c.holes + '">삭제</button>' : '') + '</div>';
     }).join('') +
       '<div class="muted small" style="margin-top:8px"><b>보내기</b>를 누르면 코스 파일이 만들어져요. 카카오톡 등으로 보내면 받은 사람이 위의 "파일로 받기"로 열 수 있어요. ' +
-      '직접 입력한 골프장은 라운드를 마치면 여기에 "내가 저장한 코스"로 나옵니다.</div></div>';
+      '직접 입력한 골프장은 새 라운드의 "코스" 칸에 이름을 적고 그 라운드를 마치면 여기에 "내가 저장한 코스"로 나옵니다.</div></div>';
     html += '</div>';
     return html;
   }
@@ -2371,28 +2439,41 @@
     var rd = new FileReader();
     rd.onload = function () {
       var res = takeCourseText(String(rd.result || ''), 'file');
-      toast(res.ok ? "'" + res.course.name + "' 코스를 받았어요." : courseWhy(res.why));
+      toast(res.ok ? gotCourseMsg(res.course) : courseWhy(res.why));
       if (state.view === 'courses') render();
     };
     rd.onerror = function () { toast('파일을 읽지 못했어요.'); };
     rd.readAsText(file);
   }
+  // "코스 파일 열기"의 파일 입력은 다시 그려지는 화면(#app) 밖에 하나만 둔다: 파일을 고르는 동안 화면이 다시 그려져도
+  // (함께 입력하는 동반자의 점수가 들어오는 등) 고른 파일이 버려지지 않는다. 화면에는 이것을 여는 단추(label)만 그린다
+  var courseFileInput = document.createElement('input');
+  courseFileInput.type = 'file'; courseFileInput.id = 'course-file'; courseFileInput.accept = '.json,application/json,text/plain';
+  courseFileInput.tabIndex = -1; courseFileInput.setAttribute('aria-hidden', 'true');
+  courseFileInput.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0';
+  courseFileInput.addEventListener('change', function () { importCourseFile(courseFileInput); });
+  document.body.appendChild(courseFileInput);
   /**
    * 진행 중인 라운드의 코스가 이 폰에 없으면 코스 목록에서 찾아 받아 둔다: 함께 입력하는 폰에도 호스트와 같은 홀 약도가 나오게 한다.
-   * 약도가 있는 코스만, 코스마다 한 번만 조용히 시도한다 (안 되면 약도 없이 그대로 쓴다)
+   * 약도가 있는 코스만 조용히 시도한다 (안 되면 약도 없이 그대로 쓴다). 답이 분명하면(목록에 없다, 받았다, 파일이 올바르지 않다)
+   * 그 코스는 다시 시도하지 않고, 연결이 안 되어 못 받았으면 앱으로 돌아오거나 연결이 돌아왔을 때 다시 시도한다 (AUTO_COURSE_GAP 간격을 두고)
    */
-  var autoCourseTried = {};
+  var autoCourse = {}, AUTO_COURSE_GAP = 30000;
   function ensureRoundCourse() {
     var r = state.round; if (!r) return;
-    var name = (r.course || '').trim(), key = r.holes + '|' + name;
-    if (!name || autoCourseTried[key] || courseMapOf(name, r.holes) || libCourse(name, r.holes)) return;
+    var name = (r.course || '').trim(), holes = r.holes, key = holes + '|' + name, t = autoCourse[key];
+    if (!name || (t && (t.done || t.busy || Date.now() - t.at < AUTO_COURSE_GAP)) || courseMapOf(name, holes) || libCourse(name, holes)) return;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
-    autoCourseTried[key] = 1;
+    t = autoCourse[key] = { done: false, busy: true, at: Date.now() };
     loadCourseIndex().then(function () {
-      var e = (courseIndex.list || []).filter(function (x) { return x.name === name && x.holes === r.holes && x.map; })[0];
-      if (!e) return;
-      return fetchCourse(e).then(function (res) { if (res.ok && state.round && (state.round.course || '').trim() === name) softRender(); });
-    }).catch(function () { /* 조용히 그만둔다 */ });
+      if (courseIndex.state !== 'ok') return; // 목록을 받지 못했다: 나중에 다시
+      var e = (courseIndex.list || []).filter(function (x) { return x.name === name && x.holes === holes && x.map; })[0];
+      if (!e) { t.done = true; return; }
+      return fetchCourse(e).then(function (res) {
+        if (res.ok || res.why !== 'net') t.done = true;
+        if (res.ok && state.round && (state.round.course || '').trim() === name) softRender();
+      });
+    }).catch(function () { /* 조용히 그만둔다 */ }).then(function () { t.busy = false; });
   }
 
   function viewHtml() {
@@ -2667,7 +2748,7 @@
       var d = state.draft; if (!d) return;
       var name = (d.course || '').trim(), bi = builtinCourse(name, d.holes);
       if (!savedCourse(name, d.holes)) return;
-      if (!confirm(bi ? "내가 저장한 '" + name + "' 코스를 지우고 기본 제공 값으로 되돌릴까요?" : "저장한 '" + name + "' 코스를 삭제할까요? (지난 라운드 기록은 그대로예요)")) return;
+      if (!confirm(bi ? "내가 저장한 '" + name + "' 코스를 지우고 " + (libCourse(name, d.holes) ? '받은 값' : '기본 제공 값') + "으로 되돌릴까요?" : "저장한 '" + name + "' 코스를 삭제할까요? (지난 라운드 기록은 그대로예요)")) return;
       state.courses = (state.courses || []).filter(function (c) { return !(c && c.name === name && c.holes === d.holes); });
       if (!bi) d.course = '';
       save(); render();
@@ -2682,14 +2763,20 @@
       libBusy = e.file; render();
       fetchCourse(e).then(function (res) {
         libBusy = null;
-        toast(res.ok ? "'" + res.course.name + "' 코스를 받았어요. 새 라운드의 \"코스 불러오기\"에서 고르세요." : courseWhy(res.why));
+        toast(res.ok ? gotCourseMsg(res.course) : courseWhy(res.why));
         if (state.view === 'courses') render();
       });
     },
     'lib-del': function (d) {
-      var holes = Number(d.holes);
-      if (!libCourse(d.name, holes) || !confirm("받은 '" + d.name + "' 코스를 이 폰에서 지울까요? (지난 라운드 기록은 그대로예요)")) return;
-      removeLibCourse(d.name, holes); render();
+      var holes = Number(d.holes), r = state.round;
+      if (!libCourse(d.name, holes)) return;
+      // 진행 중인 라운드가 쓰는 코스는 지우지 않는다: 치는 도중에 홀 약도가 사라지고, 다음에 앱을 열면 자동으로 다시 받아져서 지운 것이 되돌아온다
+      if (r && (r.course || '').trim() === d.name && r.holes === holes) { toast('진행 중인 라운드가 이 코스를 쓰고 있어요. 라운드를 마친 뒤에 지울 수 있어요.'); return; }
+      var mine = !!savedCourse(d.name, holes); // 받은 코스를 내가 고쳐 저장한 사본이 있으면 함께 지운다 (사본만 남으면 지운 코스가 계속 보인다)
+      if (!confirm("받은 '" + d.name + "' 코스를 이 폰에서 지울까요?" + (mine ? ' 내가 고쳐 저장한 값도 함께 지워져요.' : '') + ' (지난 라운드 기록은 그대로예요)')) return;
+      removeLibCourse(d.name, holes);
+      if (mine) { state.courses = (state.courses || []).filter(function (c) { return !(c && c.name === d.name && c.holes === holes); }); save(); }
+      render();
     },
     'course-send': function (d) { sendCourse(d.name, Number(d.holes)); },
     // 분석 화면
@@ -2803,7 +2890,6 @@
   });
   $app.addEventListener('change', function (ev) {
     var el = ev.target;
-    if (el && el.id === 'course-file') { importCourseFile(el); return; } // 골프장 받기 화면의 "코스 파일 열기"
     if (!el.dataset || !el.dataset.bind) return;
     var toggle = el.type === 'checkbox' || el.tagName === 'SELECT';
     // 글·숫자 입력란은 칠 때마다(input) 이미 저장했다. 입력란을 떠날 때의 change에서 같은 값을 또 쓰면, 그 사이 동반자가 고친 새 값을
@@ -2816,8 +2902,11 @@
     if (ev.key === 'Enter' && ev.target && ev.target.id === 'join-code') { ev.preventDefault(); joinRoom(ev.target.value, 0); }
     // 키워드 입력란에서 Enter = 추가. 한글 조합 중의 Enter(글자 확정)는 넘긴다
     if (ev.key === 'Enter' && ev.target && ev.target.id === 'kw-in' && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); actions['kw-add']({}, ev.target, ev); }
+    // "코스 파일 열기"는 label이라 키보드로는 눌리지 않는다: Enter·스페이스로도 열리게 한다
+    if ((ev.key === 'Enter' || ev.key === ' ') && ev.target && ev.target.tagName === 'LABEL' && ev.target.htmlFor === 'course-file') { ev.preventDefault(); courseFileInput.click(); }
   });
   function wakeSession() {
+    ensureRoundCourse(); // 연결이 안 되어 받지 못한 라운드의 코스가 있으면 다시 시도한다
     fgAt = Date.now();
     setTimeout(function () { if (session && sharingActive()) { session.wake(); softRender(); } }, 400);
   }

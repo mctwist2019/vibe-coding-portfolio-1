@@ -10,9 +10,16 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const S = require('../sync.js');
 
-/** 폴더를 읽어 { index: { v, courses: [{ file, name, holes, map, updated, note }] }, skipped: [[파일, 이유]] } */
+/**
+ * 코스 내용의 지문. 앱은 목록에서 코스를 받을 때 이 값을 함께 적어 두고, 나중에 목록의 값이 달라졌으면 "새로 받기"를 띄운다:
+ * 같은 날 고쳐서 다시 올린 자료는 날짜(updated)만으로는 알아볼 수 없기 때문이다. 읽어서 정리한 내용으로 만든다 (줄바꿈·공백만 다른 파일은 같은 값)
+ */
+function sigOf(course) { return crypto.createHash('sha256').update(JSON.stringify(course)).digest('hex').slice(0, 16); }
+
+/** 폴더를 읽어 { index: { v, courses: [{ file, name, holes, map, updated, note, sig }] }, skipped: [[파일, 이유]] } */
 function build(dir) {
   const valid = [], skipped = [];
   let files = [];
@@ -26,7 +33,7 @@ function build(dir) {
     try { obj = JSON.parse(text.replace(/^﻿/, '')); } catch (e) { skipped.push([file, 'not JSON']); return; }
     const r = S.readCourseFile(obj);
     if (!r.ok) { skipped.push([file, r.why]); return; }
-    valid.push({ file, name: r.course.name, holes: r.course.holes, map: !!r.course.map, updated: r.course.updated, note: r.course.note });
+    valid.push({ file, name: r.course.name, holes: r.course.holes, map: !!r.course.map, updated: r.course.updated, note: r.course.note, sig: sigOf(r.course) });
   });
   // 같은 코스가 여럿이면 하나만
   const best = {};
@@ -49,4 +56,4 @@ if (require.main === module) {
   res.skipped.forEach((s) => console.log('  SKIPPED ' + s[0] + ': ' + s[1]));
 }
 
-module.exports = { build };
+module.exports = { build, sigOf };

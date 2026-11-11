@@ -19,14 +19,22 @@ const FILES = {
 };
 const UPDATED = '2026-11-11';
 
-const dir = path.join(__dirname, '..', 'courses');
-fs.mkdirSync(dir, { recursive: true });
-courses.forEach((c) => {
-  const file = FILES[c.name];
-  if (!file) throw new Error('no file name for ' + c.name);
-  const obj = S.makeCourseFile(c, maps[c.name], { updated: UPDATED });
-  const check = S.readCourseFile(JSON.parse(JSON.stringify(obj)));
-  if (!check.ok) throw new Error(c.name + ': ' + check.why);
-  fs.writeFileSync(path.join(dir, file), JSON.stringify(obj) + '\n');
-  console.log('wrote ' + file + (obj.map ? ' (약도 포함)' : ''));
-});
+/** 기본 제공 코스를 코스 파일로 dir에 쓴다 → 쓴 파일 이름들 */
+function exportTo(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  return courses.map((c) => {
+    const file = FILES[c.name];
+    if (!file) throw new Error('no file name for ' + c.name);
+    const obj = S.makeCourseFile(c, maps[c.name], { updated: UPDATED });
+    const check = S.readCourseFile(JSON.parse(JSON.stringify(obj)));
+    if (!check.ok) throw new Error(c.name + ': ' + check.why);
+    fs.writeFileSync(path.join(dir, file), JSON.stringify(obj) + '\n');
+    return file;
+  });
+}
+
+if (require.main === module) {
+  exportTo(path.join(__dirname, '..', 'courses')).forEach((file) => console.log('wrote ' + file));
+}
+
+module.exports = { exportTo, UPDATED };

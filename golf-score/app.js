@@ -82,7 +82,8 @@
       vegas: { enabled: false, net: false, unit: 100 },
       // parthree(니어는 파3 홀에서만) · parfive(롱기는 파5 홀에서만) · eraser(지우개 룰)도 여기서는 꺼 둔다: 예전에 만든 라운드의 횟수와 돈이 바뀌면 안 된다.
       // 새 라운드는 newDraft에서 켠 채로 시작한다 (useNewBonusDefaults)
-      bonus: { nearest: false, longest: false, birdie: false, unit: 1000, parthree: false, parfive: false, eraser: false }
+      // made: 이 설정을 만든 앱 버전. 12부터 적고(upgradeDefaults), 그 전에 만든 라운드는 0이다. 함께 보는 기기에도 전해진다
+      bonus: { nearest: false, longest: false, birdie: false, unit: 1000, parthree: false, parfive: false, eraser: false, made: 0 }
     };
   }
   function fillGames(g) { var d = defaultGames(); Object.keys(d).forEach(function (k) { g[k] = Object.assign(d[k], g[k] || {}); }); return g; }
@@ -97,8 +98,11 @@
   function madeHere(g) { return !!(g && g.skins && g.skins.playorder); }
   /** 새 라운드의 니어·롱기: 니어는 파3 홀에서만, 롱기는 파5 홀에서만 고르고, 파3의 지우개 룰을 쓴다 */
   function useNewBonusDefaults(g) { g.bonus.parthree = true; g.bonus.parfive = true; g.bonus.eraser = true; return g; }
-  /** 이 게임 설정을 만든 앱 버전. games.made에 적어 둔다(기기에만 남고 공유되지 않는다). 없으면 공금 방식 표시로 11과 그 이전을 가른다 */
-  function madeBy(g) { return g && typeof g.made === 'number' ? g.made : madeHere(g) ? 11 : 10; }
+  /**
+   * 이 게임 설정을 만든 앱 버전. 12부터는 bonus.made에 적혀 있고(공유되므로 참여한 기기도 같은 값을 본다), 없으면 공금 방식 표시로 11과 그 이전을 가른다.
+   * 예전 라운드에 fillGames가 채운 값(니어·롱기 룰 false)은 '고른 값'이 아니므로, 설정 항목이 있느냐가 아니라 이 표시로 판단한다
+   */
+  function madeBy(g) { var m = g && g.bonus ? Number(g.bonus.made) : 0; return m > 0 ? m : madeHere(g) ? 11 : 10; }
   /**
    * 예전 버전(from)에서 만든 게임 설정으로 새 라운드를 시작할 때: 그 뒤에 생긴 기본값을 준다 (11: 스킨스 공금 방식, 12: 니어·롱기 홀 제한과 지우개).
    * 이 버전에서 만든 설정을 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다
@@ -106,7 +110,7 @@
   function upgradeDefaults(g, from) {
     if (from < 11) useNewSkinsDefaults(g);
     if (from < 12) useNewBonusDefaults(g);
-    g.made = BUILD;
+    g.bonus.made = BUILD;
     return g;
   }
   /** 모든 게임 계산. 홀을 친 순서(10번홀 출발 등)를 넘겨 스킨스 이월·OECD 가입·오장의 '앞 홀'이 실제 순서를 따르게 한다 (스킨스는 이 버전에서 만든 라운드만) */
@@ -129,7 +133,7 @@
     // 예전 버전이 저장해 둔 새 라운드 초안과 지난 라운드에는 그 뒤에 생긴 게임 설정(오장 등)이 없다. 빠진 채로 화면을 그리면 오류가 나므로 채워 둔다
     // 예전 버전에서 쓰다 만 초안은 새 라운드와 같은 스킨스 기본값(공금 방식 등)으로 맞춘다. 지난 라운드와 진행 중인 라운드는 돈 계산이 바뀌면 안 되므로 그대로 둔다
     if (s.draft && typeof s.draft === 'object') {
-      var dg = s.draft.games, dfrom = !(dg && dg.skins && dg.skins.playorder !== undefined) ? 10 : typeof dg.made === 'number' ? dg.made : 11;
+      var dg = s.draft.games, dfrom = madeBy(dg); // 채우기 전에 본다 (초안에 공금 방식 표시가 없으면 10, 있고 made가 없으면 11)
       upgradeDefaults(fillGames(s.draft.games = dg || {}), dfrom);
     }
     s.history.forEach(function (hr) { if (hr && typeof hr === 'object') fillGames(hr.games = hr.games || {}); });
@@ -430,9 +434,6 @@
     var r = S.roundFromSnapshot(keys, DEFAULTS);
     if (!r) return;
     fillGames(r.games);
-    // 설정을 만든 버전 표시(games.made)는 공유되지 않는다. 호스트가 보낸 설정에 니어·롱기 룰이 들어 있으면 그 룰이 생긴 버전(12)에서 만든 것으로 적어 둔다:
-    // 이 라운드의 설정을 베껴 새 라운드를 만들 때 호스트가 꺼 둔 룰을 다시 켜지 않는다 (upgradeDefaults)
-    if (keys['gm:bonus:parthree']) r.games.made = 12;
     var idx = scan ? scan.idx : 0;
     clearScan();
     r.share = { code: code, host: r.share && r.share.host, active: true, broker: idx };
@@ -1790,7 +1791,7 @@
         '<div class="muted small" data-eraser="' + (ni.erased ? 'on' : ni.eraser ? 'pending' : 'none') + '">' +
         (ni.erased ? '<b>' + who + '</b>의 지우개로 이 홀의 니어(' + near + ')는 없어요.'
           : ni.why === 'noscore' ? who + '의 타수를 입력하면 지우개가 정해져요 (파 이하일 때 인정).'
-            : ni.why === 'over' ? who + '가 파를 못 해서 지우개가 인정되지 않아요. 니어는 ' + near + ' 그대로예요.'
+            : ni.why === 'over' ? '<b>' + who + '</b>: 파를 못 해서 지우개가 인정되지 않아요. 니어는 ' + near + ' 그대로예요.'
               : '지우개: 그린에 올리지 못한 사람이 파 이하로 마쳤으면 그 사람을 고르세요. 이 홀의 니어가 지워져요.') + '</div>';
     }
     if (showLong) html += '<div class="chips"><span class="small muted blab">롱기스트</span>' + chips('longest', r.players, ex.longest) + '</div>';
@@ -2462,6 +2463,9 @@
       // 지우개: 파3에서 니어를 고른 뒤에, 니어를 한 사람이 아닌 사람만 고를 수 있다
       if (d.type === 'eraser' && (!bn.eraser || par !== 3 || !ex.nearest || ex.nearest === d.pid)) return;
       r.extras = r.extras || {}; r.extras[h] = ex;
+      // 함께 쓰는 기기끼리 니어와 지우개를 겹쳐 고치면, 화면에는 안 보이는 지우개(니어가 없거나 니어와 같은 사람)가 남을 수 있다.
+      // 그대로 두면 다음에 고르는 니어가 곧바로 지워지므로, 니어를 누를 때 그런 지우개는 먼저 없앤다
+      if (d.type === 'nearest' && ex.eraser && (!ex.nearest || ex.nearest === ex.eraser)) ex.eraser = null;
       ex[d.type] = ex[d.type] === d.pid ? null : d.pid;
       // 니어가 없어지거나 지우개로 적힌 사람이 니어가 되면 지우개 표시는 뜻이 없으므로 함께 지운다
       if (d.type === 'nearest' && ex.eraser && (!ex.nearest || ex.nearest === ex.eraser)) ex.eraser = null;

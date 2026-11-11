@@ -521,6 +521,13 @@ test('nearest/longest rules and the eraser are shared: bonus settings and the pe
   S.stamp(r, ['extra:2:eraser'], S.createClock(() => 3000), 'me');
   assert.deepEqual(S.merge(other, S.exportKeys(r)).changed, ['extra:2:eraser']);
   assert.equal(other.extras[2].eraser, null);
+  // 설정을 만든 버전 표시: 0~9999의 정수만
+  assert.equal(S.setKey(r, 'gm:bonus:made', 12), true); assert.equal(r.games.bonus.made, 12);
+  assert.equal(S.setKey(r, 'gm:bonus:made', 'twelve'), false);
+  assert.equal(S.setKey(r, 'gm:bonus:made', -1), true); assert.equal(r.games.bonus.made, 0, 'clamped');
+  assert.equal(S.setKey(r, 'gm:bonus:made', 12), true);
+  S.stamp(r, ['gm:bonus:made'], S.createClock(() => 3500), 'me');
+  assert.ok(S.merge(other, S.exportKeys(r)).changed.indexOf('gm:bonus:made') >= 0); assert.equal(other.games.bonus.made, 12);
   // 니어까지 지우면 그 홀의 기록이 없어진다
   assert.equal(S.setKey(r, 'extra:2:nearest', null), true);
   assert.equal(r.extras[2], undefined);

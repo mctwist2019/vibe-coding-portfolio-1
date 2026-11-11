@@ -58,7 +58,9 @@
     nassau: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
     bestball: { enabled: 'bool', net: 'bool', count: 'count', unit: 'money' },
     vegas: { enabled: 'bool', net: 'bool', unit: 'money' },
-    bonus: { nearest: 'bool', longest: 'bool', birdie: 'bool', unit: 'money', parthree: 'bool', parfive: 'bool', eraser: 'bool' }
+    // made: 이 라운드의 게임 설정을 만든 앱 버전(12부터 적는다. 그 전에 만든 라운드는 0). 화면에서 바꾸는 값이 아니라 표시다:
+    // 참여한 기기가 이 라운드의 설정을 베껴 새 라운드를 만들 때, 호스트가 고른 값인지 예전 라운드라 비어 있던 값인지 가른다
+    bonus: { nearest: 'bool', longest: 'bool', birdie: 'bool', unit: 'money', parthree: 'bool', parfive: 'bool', eraser: 'bool', made: 'build' }
   };
   /**
    * 홀별 상세 기록(선택 입력): round.stats[pid][hole][field]
@@ -155,6 +157,7 @@
       case 'money': { var m = clampInt(v, 0, 100000000); return m === null ? undefined : m; }
       case 'mode': return v === 'individual' || v === 'team' ? v : undefined;
       case 'count': return v === 1 || v === 2 ? v : undefined;
+      case 'build': { var bv = clampInt(v, 0, 9999); return bv === null ? undefined : bv; }
     }
     return undefined;
   }

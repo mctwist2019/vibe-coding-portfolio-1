@@ -34,10 +34,22 @@
     return arr;
   }
 
+  /**
+   * 한 홀에서 세는 가장 큰 타수. 보통은 15타이고, '양파 한도'(round.games.stroke.cap)를 켠 라운드는 파의 두 배까지만 센다
+   * (파3 6타 · 파4 8타 · 파5 10타)
+   */
+  function maxScore(round, h) {
+    var cap = !!(round.games && round.games.stroke && round.games.stroke.cap), par = Number(round.pars && round.pars[h]);
+    return cap && par > 0 ? Math.min(15, par * 2) : 15;
+  }
+  /**
+   * 홀 타수(없으면 null). 모든 순위·게임·분석이 이 값을 쓴다. 양파 한도를 켜면 그보다 크게 적힌 타수
+   * (한도를 켜기 전에 넣었거나 예전 버전 기기가 넣은 값)도 한도로 센다. 저장된 값은 그대로 둔다
+   */
   function gross(round, pid, h) {
     var s = round.scores && round.scores[pid];
     var v = s ? s[h] : null;
-    return typeof v === 'number' && v > 0 ? v : null;
+    return typeof v === 'number' && v > 0 ? Math.min(v, maxScore(round, h)) : null;
   }
 
   function strokesMap(round) {
@@ -56,7 +68,9 @@
     return g - sm[pid][h];
   }
 
-  function toParLabel(diff) {
+  /** 파 대비 타수의 이름. par를 주면 파의 두 배(양파)를 '양파'라고 부른다 */
+  function toParLabel(diff, par) {
+    if (par > 0 && diff === par) return '양파';
     if (diff <= -3) return '알바트로스';
     if (diff === -2) return '이글';
     if (diff === -1) return '버디';
@@ -229,16 +243,42 @@
     return e.isTeam ? teamHoleScore(round, e.pids, h, useNet, count || 1, sm) : score(round, e.pids[0], h, useNet, sm);
   }
 
+  /**
+   * OECD 룰의 벌칙 항목(흔히 '오빠삼삼해'): OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상.
+   * OB·벙커·해저드·퍼트 수는 홀별 상세 기록(round.stats)에 입력된 값으로, 트리플은 타수(핸디 적용 전)로 판정한다.
+   * 한 홀에서 같은 항목은 여러 번 해도 한 번으로 센다
+   */
+  var OECD_ITEMS = [['ob', 'OB'], ['bk', '벙커'], ['hz', '해저드'], ['pt3', '3퍼트'], ['tri', '트리플']];
+  var OECD_JOIN = 5; // 가입 기준(딴 스킨 수)의 기본값: 4명 18홀이면 본전이 4.5개
+  function oecdFaults(round, pid, h) {
+    var st = (round.stats && round.stats[pid] && round.stats[pid][h]) || {}, out = [];
+    if (st.ob > 0) out.push('ob');
+    if (st.bk > 0) out.push('bk');
+    if (st.hz > 0) out.push('hz');
+    if (st.pt >= 3) out.push('pt3');
+    var g = gross(round, pid, h);
+    if (g !== null && g - round.pars[h] >= 3) out.push('tri');
+    return out;
+  }
+  function oecdJoin(v) { v = Math.round(Number(v)); return v >= 1 && v <= 18 ? v : OECD_JOIN; }
+
+  /**
+   * 스킨스. opt.oecd(개인전에서만): 딴 스킨이 opt.join개 이상인 사람은 'OECD 가입자'가 되고, 가입한 채로 시작한 홀에서 벌칙 항목에 걸리면
+   * 걸린 항목마다 딴 스킨 1개를 내놓는다. 내놓은 스킨은 이월분에 얹혀 다음 홀 단독 승자가 가져간다.
+   * (돈으로는: 내놓는 사람이 다른 사람 각각에게 스킨당 단가를 돌려주고, 그 스킨을 다음 승자가 보통 스킨처럼 받는다)
+   * 내놓아서 기준 아래로 내려가면 다시 기준을 채울 때까지 벌칙이 없다
+   */
   function skins(round, opt) {
     opt = opt || {};
     var useNet = !!opt.net;
     var unit = Number(opt.unit) || 0;
     var ents = entrantsFor(round, opt.mode);
-    var res = { entrants: [], holes: [], carry: 0, transfers: [], error: null };
+    var oecd = !!opt.oecd && opt.mode !== 'team', join = oecdJoin(opt.join);
+    var res = { entrants: [], holes: [], carry: 0, transfers: [], error: null, oecd: { on: oecd, join: join } };
     if (ents.length < 2) { res.error = opt.mode === 'team' ? '팀이 2개 이상 필요합니다' : '플레이어가 2명 이상 필요합니다'; return res; }
     var sm = strokesMap(round);
-    var won = {};
-    ents.forEach(function (e) { won[e.id] = 0; });
+    var won = {}, returned = {};
+    ents.forEach(function (e) { won[e.id] = 0; returned[e.id] = 0; });
     var carry = 0;
     var allPids = [];
     ents.forEach(function (e) { allPids = allPids.concat(e.pids); });
@@ -252,24 +292,120 @@
       var min = Math.min.apply(null, scores);
       var winners = [];
       scores.forEach(function (s, i) { if (s === min) winners.push(i); });
+      // 이 홀을 시작할 때의 OECD 가입자 (이 홀에서 따서 기준을 채운 사람은 다음 홀부터)
+      var members = oecd ? ents.filter(function (e) { return won[e.id] >= join; }) : [];
       carry += 1;
+      var rec;
       if (winners.length === 1) {
         var w = ents[winners[0]];
         won[w.id] += carry;
         var losers = allPids.filter(function (pid) { return w.pids.indexOf(pid) < 0; });
         res.transfers = res.transfers.concat(makeTransfers(w.pids, losers, unit * carry, 'skins', (h + 1) + '번홀 ' + carry + '스킨'));
-        res.holes.push({ hole: h, winner: w.id, winnerName: w.name, skins: carry, carry: 0, played: true });
+        rec = { hole: h, winner: w.id, winnerName: w.name, skins: carry, carry: 0, played: true };
         carry = 0;
       } else {
-        res.holes.push({ hole: h, winner: null, skins: 0, carry: carry, played: true, tie: true });
+        rec = { hole: h, winner: null, skins: 0, carry: carry, played: true, tie: true };
       }
+      // OECD 벌칙: 걸린 항목마다 딴 스킨 1개를 내놓아 이월분에 얹는다
+      members.forEach(function (e) {
+        var faults = oecdFaults(round, e.pids[0], h), k = Math.min(faults.length, won[e.id]);
+        if (!k) return;
+        won[e.id] -= k; returned[e.id] += k; carry += k;
+        var others = allPids.filter(function (pid) { return pid !== e.pids[0]; });
+        var names = faults.map(function (f) { return OECD_ITEMS.filter(function (it) { return it[0] === f; })[0][1]; });
+        res.transfers = res.transfers.concat(makeTransfers(others, e.pids, unit * k * others.length, 'skins', (h + 1) + '번홀 OECD ' + names.join('·') + ' ' + k + '스킨 반납'));
+        (rec.oecd = rec.oecd || []).push({ id: e.id, name: e.name, faults: faults, labels: names, returned: k });
+      });
+      rec.carry = carry;
+      res.holes.push(rec);
     }
     res.carry = carry;
     res.entrants = ents.map(function (e) {
-      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id] };
+      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id], returned: returned[e.id], oecd: oecd && won[e.id] >= join };
     }).sort(function (a, b) { return b.skins - a.skins; });
     res.unit = unit;
     res.net = useNet;
+    return res;
+  }
+
+  // ───────────────────────── 오장 (타당 스트로크 · 배판) ─────────────────────────
+  /**
+   * 오장: 홀마다 타수 차 × 타당 금액을 서로 주고받는 스트로크 내기 (이름은 기본 금액 5천 원에서 왔다. 금액은 opt.unit으로 정한다).
+   * 아래 가운데 하나라도 해당하는 홀은 '배판'으로 그 홀의 금액이 2배다 (여러 개가 겹쳐도 2배).
+   *   · 버디 이하가 나온 홀            · 트리플 보기 이상이 한 명이라도 나온 홀
+   *   · 파3에서 더블 보기 이상이 나온 홀  · 세 명 이상이 같은 타수인 홀
+   *   · opt.carry(기본 켬): 바로 앞 번호 홀에서 전원이 같은 타수였던 홀
+   * 타수 차는 opt.net이면 핸디 적용 타수로 계산하고, 배판 조건과 니어·버디는 실제 타수로 본다.
+   * opt.near(기본 켬) 파3 니어: 니어리스트(round.extras[h].nearest)가 파 이하로 마치면 다른 사람 각각에게서 1타 금액을 더 받는다.
+   *   파를 못 하면 없던 것으로 한다.
+   * opt.birdie(기본 켬) 버디값: 버디 이하를 한 사람은 다른 사람 각각에게서 1타 금액을 더 받는다.
+   * 니어와 버디값도 그 홀이 배판이면 2배다. 전원이 타수를 입력한 홀만 계산한다.
+   */
+  function ojang(round, opt) {
+    opt = opt || {};
+    var unit = Number(opt.unit) || 0, useNet = !!opt.net, sm = strokesMap(round);
+    var carryOn = opt.carry !== false, nearOn = opt.near !== false, birdieOn = opt.birdie !== false;
+    var pids = round.players.map(function (p) { return p.id; });
+    var res = { holes: [], rows: [], transfers: [], unit: unit, net: useNet, error: null, doubles: 0, nextDouble: null };
+    if (pids.length < 2) { res.error = '플레이어가 2명 이상 필요합니다'; return res; }
+    var money = {};
+    pids.forEach(function (pid) { money[pid] = 0; });
+    function pay(from, to, amount, note) {
+      if (!amount) return;
+      money[from] -= amount; money[to] += amount;
+      res.transfers.push({ from: from, to: to, amount: amount, game: 'ojang', note: note });
+    }
+    var prevAllTied = false;
+    for (var h = 0; h < round.holes; h++) {
+      if (!holeCompleteFor(round, pids, h)) {
+        // 아직 다 입력하지 않은 홀: 앞 홀이 전원 동타였다면 이 홀이 배판이 될 차례다
+        if (carryOn && prevAllTied && res.nextDouble === null) res.nextDouble = h;
+        res.holes.push({ hole: h, played: false, mult: 1, reasons: [] });
+        prevAllTied = false;
+        continue;
+      }
+      var par = round.pars[h];
+      var g = pids.map(function (pid) { return gross(round, pid, h); });
+      var reasons = [];
+      if (g.some(function (v) { return v - par <= -1; })) reasons.push('버디');
+      if (g.some(function (v) { return v - par >= 3; })) reasons.push('트리플');
+      if (par === 3 && g.some(function (v) { return v - par === 2; })) reasons.push('파3 더블');
+      var same = {}, most = 0;
+      g.forEach(function (v) { same[v] = (same[v] || 0) + 1; if (same[v] > most) most = same[v]; });
+      if (most >= 3) reasons.push('동타 ' + most + '명');
+      if (carryOn && prevAllTied) reasons.push('앞 홀 전원 동타');
+      var mult = reasons.length ? 2 : 1, tag = (h + 1) + '번홀' + (mult === 2 ? ' 배판' : '');
+      if (mult === 2) res.doubles++;
+      var rec = { hole: h, played: true, mult: mult, reasons: reasons };
+      // 타수 차 (둘씩)
+      var s = pids.map(function (pid) { return score(round, pid, h, useNet, sm); });
+      for (var i = 0; i < pids.length; i++) {
+        for (var j = i + 1; j < pids.length; j++) {
+          var d = s[i] - s[j];
+          if (d > 0) pay(pids[i], pids[j], d * unit * mult, tag + ' ' + d + '타');
+          else if (d < 0) pay(pids[j], pids[i], -d * unit * mult, tag + ' ' + (-d) + '타');
+        }
+      }
+      // 파3 니어: 파 이하로 마쳐야 받는다
+      var np = nearOn && par === 3 && round.extras && round.extras[h] ? round.extras[h].nearest : null;
+      if (np && pids.indexOf(np) >= 0) {
+        var ok = gross(round, np, h) <= par;
+        rec.near = { pid: np, ok: ok };
+        if (ok) pids.forEach(function (pid) { if (pid !== np) pay(pid, np, unit * mult, tag + ' 니어'); });
+      }
+      // 버디값
+      if (birdieOn) {
+        pids.forEach(function (pid, k) {
+          if (g[k] - par > -1) return;
+          (rec.birdies = rec.birdies || []).push(pid);
+          pids.forEach(function (other) { if (other !== pid) pay(other, pid, unit * mult, tag + ' 버디값'); });
+        });
+      }
+      res.holes.push(rec);
+      prevAllTied = most === pids.length;
+    }
+    res.rows = round.players.map(function (p) { return { id: p.id, name: p.name, amount: money[p.id] }; })
+      .sort(function (a, b) { return b.amount - a.amount; });
     return res;
   }
 
@@ -553,6 +689,7 @@
     add('stroke', strokePlay(round, g.stroke || {}), true);
     out.stableford = stableford(round, g.stableford || {});
     add('skins', skins(round, g.skins || {}), g.skins && g.skins.enabled);
+    add('ojang', ojang(round, g.ojang || {}), g.ojang && g.ojang.enabled);
     add('match', matchPlay(round, g.match || {}), g.match && g.match.enabled);
     if (round.holes === 18) add('nassau', nassau(round, g.nassau || {}), g.nassau && g.nassau.enabled);
     add('bestball', bestBall(round, g.bestball || {}), g.bestball && g.bestball.enabled);
@@ -571,6 +708,7 @@
     strokesPerHole: strokesPerHole,
     strokesMap: strokesMap,
     gross: gross,
+    maxScore: maxScore,
     score: score,
     toParLabel: toParLabel,
     fmtToPar: fmtToPar,
@@ -579,9 +717,13 @@
     teamHoleScore: teamHoleScore,
     stablefordPoints: stablefordPoints,
     computeMatch: computeMatch,
+    OECD_ITEMS: OECD_ITEMS,
+    OECD_JOIN: OECD_JOIN,
+    oecdFaults: oecdFaults,
     strokePlay: strokePlay,
     stableford: stableford,
     skins: skins,
+    ojang: ojang,
     matchPlay: matchPlay,
     nassau: nassau,
     bestBall: bestBall,

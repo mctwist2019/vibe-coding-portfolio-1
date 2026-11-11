@@ -430,3 +430,25 @@ test('shot count (st:<pid>:<h>:sh) syncs like the other detail stats', () => {
   S.setKey(b, 'st:a:2:sh', null);
   assert.deepEqual(b.stats.a[2], { pt: 2 });
 });
+
+test('game settings for the OECD rule are validated like the others', () => {
+  const r = { id: 'r', holes: 18, date: 'd', createdAt: 1, name: 'n', pars: Array(18).fill(4), strokeIndex: Array.from({ length: 18 }, (_, i) => i + 1),
+    players: [{ id: 'a', name: 'A', hcp: 0, team: '' }], scores: { a: Array(18).fill(null) }, extras: {}, status: 'live', rev: {},
+    games: { skins: { enabled: true, net: false, mode: 'individual', unit: 1000, oecd: true, join: 5 } } };
+  assert.equal(S.GAME_SCHEMA.skins.oecd, 'bool');
+  assert.ok(S.allKeys(r).includes('gm:skins:oecd') && S.allKeys(r).includes('gm:skins:join'));
+  assert.equal(S.getKey(r, 'gm:skins:join'), 5);
+  assert.equal(S.setKey(r, 'gm:skins:join', 3), true); assert.equal(r.games.skins.join, 3);
+  assert.equal(S.setKey(r, 'gm:skins:join', 99), true); assert.equal(r.games.skins.join, 18, 'clamped to the number of holes at most');
+  assert.equal(S.setKey(r, 'gm:skins:join', 'x'), false); assert.equal(r.games.skins.join, 18);
+  assert.equal(S.setKey(r, 'gm:skins:oecd', 'maybe'), false); assert.equal(r.games.skins.oecd, true);
+  assert.equal(S.setKey(r, 'gm:skins:oecd', false), true); assert.equal(r.games.skins.oecd, false);  // 오장 설정과 양파 한도
+  assert.deepEqual(Object.keys(S.GAME_SCHEMA.ojang).sort(), ['birdie', 'carry', 'enabled', 'near', 'net', 'unit']);
+  assert.equal(S.setKey(r, 'gm:ojang:unit', 5000), true); assert.equal(r.games.ojang.unit, 5000);
+  assert.equal(S.setKey(r, 'gm:ojang:unit', -1), true); assert.equal(r.games.ojang.unit, 0, 'money is clamped at zero');
+  assert.equal(S.setKey(r, 'gm:ojang:carry', false), true); assert.equal(r.games.ojang.carry, false);
+  assert.equal(S.setKey(r, 'gm:ojang:mode', 'team'), false, 'no such setting');
+  assert.equal(S.setKey(r, 'gm:stroke:cap', true), true); assert.equal(r.games.stroke.cap, true);
+  assert.equal(S.setKey(r, 'gm:stroke:cap', 2), false);
+  assert.ok(S.allKeys(r).includes('gm:ojang:unit') && S.allKeys(r).includes('gm:stroke:cap'));
+});

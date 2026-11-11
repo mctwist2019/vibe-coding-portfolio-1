@@ -119,13 +119,13 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
   .holehead { gap: 8px; }
   .holehead .num { font-size: 34px; }
   .holehead .num small { font-size: 14px; }
-  .holehead .seg button { padding: 8px 9px; }
-  .holehead .si input { width: 46px; }
+  .holehead .si input { width: 50px; }
 }
-@media (max-width: 340px) {
+@media (max-width: 340px) { /* 파 단추는 누르기 좋은 너비(30px)를 지킨다 */
+  .holehead { gap: 6px; }
   .holehead .num { font-size: 30px; }
   .holehead .meta .row { gap: 5px; }
-  .holehead .seg button { padding: 8px 7px; }
+  .holehead .seg button { padding: 8px 0; min-width: 30px; }
   .holehead .si { gap: 4px; }
   .holehead .si input { width: 40px; }
 }

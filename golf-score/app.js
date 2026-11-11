@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 13;
+  var BUILD = 12;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -742,8 +742,7 @@
     var line1 = labels.join(' · '), line2 = words.length ? '📝 ' + words.join(A.MEMO_SEP) : '';
     if (!line2 && labels.length) { var tips = A.holeTips(r, h, myPid()); if (tips.length) line2 = '🧭 ' + tips[0]; }
     var none = !line1 && !line2;
-    // 코스 없이 시작한 라운드: 불러올 코스가 있으면 그 길을 먼저 알려 준다 (홀마다 직접 넣는 것보다 쉽고, 약도는 코스를 불러와야 나온다)
-    if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = !(r.course || '').trim() && !state.readOnly && courseList(r.holes).length ? '⚙ 설정에서 코스를 불러오면 약도가 나와요' : '거리·위험 요소를 넣으면 약도와 공략 팁이 나와요'; }
+    if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = '거리·위험 요소를 넣으면 약도와 공략 팁이 나와요'; }
     else if (!line1) line1 = r.course || (h + 1) + '번홀 키워드';
     return '<span class="ic">🗺️</span><span class="txt"><span class="l1' + (none ? ' none' : '') + '">' + esc(line1) + '</span> <span class="l2">' + esc(line2) + '</span></span><span class="go">›</span>';
   }
@@ -1007,18 +1006,6 @@
   function isBuiltinCourse(name, holes) {
     name = (name || '').trim();
     return !(state.courses || []).some(function (c) { return c.name === name && c.holes === holes; }) && BUILTIN_COURSES.some(function (c) { return c.name === name && c.holes === holes; });
-  }
-  /**
-   * 진행 중인 라운드에 코스를 불러온다: 코스 이름, 파·핸디캡, 홀 정보를 그 코스 값으로 바꾼다 (새 라운드를 그 코스로 시작한 것과 같은 값).
-   * 타수와 상세 기록, 니어·롱기 표시는 건드리지 않는다. 저장은 부르는 쪽에서 한다 (바뀐 값은 함께 보는 기기에도 전해진다)
-   */
-  function applyCourse(r, c) {
-    r.course = c.name;
-    r.pars = c.pars.slice();
-    r.strokeIndex = c.strokeIndex.slice();
-    r.holeInfo = clone(c.holeInfo || {});
-    // 공유 수신 측(setKey)과 같은 규칙으로 정규화 → 호스트와 참여자가 같은 값을 갖는다 (startRound와 같다)
-    S.allKeys(r).forEach(function (k) { if (k === 'meta') return; var v = S.getKey(r, k); if (v !== undefined) S.setKey(r, k, v); });
   }
   function findCourse(name, holes) {
     name = (name || '').trim();
@@ -1326,17 +1313,8 @@
     html += '<div class="card"><h2>라운드 정보</h2><div class="stack">' +
       '<div class="field"><label>이름</label><input type="text" data-bind="round.name" value="' + esc(r.name) + '" maxlength="60"></div>' +
       // 코스 이름은 모든 홀에 공통이라 홀마다 보이는 코스 정보 카드가 아니라 여기서 고친다
-      '<div class="field"><label>코스 이름</label><input type="text" data-bind="round.course" value="' + esc(r.course || '') + '" maxlength="' + S.COURSE_MAX + '" placeholder="예: 베어크리크 포천 · 베어" autocomplete="off">' +
-      // 코스를 고르지 않고 시작한 라운드에도 코스를 불러올 수 있게 한다 (이름만 적어서는 파·핸디캡이 채워지지 않는다)
-      (function () {
-        var list = courseList(r.holes);
-        if (!list.length) return '';
-        return '<div class="chips" style="margin-top:6px"><span class="small muted">코스 불러오기</span>' + list.map(function (c) {
-          return '<button class="chip tap ' + ((r.course || '').trim() === c.name ? 'active' : '') + '" data-action="load-course" data-name="' + esc(c.name) + '">' + esc(c.name) + '</button>';
-        }).join('') + '</div>';
-      })() + '</div>' +
-      '<div class="muted small">코스를 불러오면 이 라운드의 파·핸디캡·홀 정보가 그 코스 값으로 바뀌고, 약도가 있는 코스는 홀 약도가 나와요. 입력한 타수는 그대로예요. ' +
-      '코스 이름이 있으면 라운드를 마칠 때 홀 정보(파·거리·위험 요소·키워드)가 이 기기에 코스로 저장돼 다음 라운드에서 불러올 수 있어요.</div>' +
+      '<div class="field"><label>코스 이름</label><input type="text" data-bind="round.course" value="' + esc(r.course || '') + '" maxlength="' + S.COURSE_MAX + '" placeholder="예: 베어크리크 포천 · 베어" autocomplete="off"></div>' +
+      '<div class="muted small">코스 이름이 있으면 라운드를 마칠 때 홀 정보(파·거리·위험 요소·키워드)가 이 기기에 코스로 저장돼 다음 라운드에서 불러올 수 있어요.</div>' +
       '</div></div>';
     html += playersSection('round', r.players, false);
     html += gamesSection('round', r.games, r.holes);
@@ -2278,10 +2256,6 @@
         state.draft.games.skins.playorder = true;
         state.draft.holes = prev.holes;
         if (state.draft.holes !== 18) state.draft.games.nassau.enabled = false; // 나소는 18홀 전용
-        // 코스도 이어받는다: 가장 최근에 코스를 정하고 친 라운드(같은 홀 수)의 코스. 코스를 고르지 않고 시작하면 홀 약도와 코스의 파·핸디캡이 빠진다.
-        // 바로 앞 라운드에 코스가 없었더라도(코스 없이 시작해 버린 라운드) 그 전에 치던 코스로 돌아온다. 다른 골프장이면 새 라운드 화면에서 바꾸면 된다
-        var lastCourse = state.history.filter(function (hr) { return hr && hr.holes === prev.holes && (hr.course || '').trim(); })[0];
-        if (lastCourse) state.draft.course = lastCourse.course.trim();
       }
       state.setupError = null;
       go('setup');
@@ -2466,12 +2440,6 @@
       save(); render();
     },
     'pick-course': function (d) { if (!state.draft) return; state.draft.course = (state.draft.course || '').trim() === d.name ? '' : d.name; save(); render(); },
-    'load-course': function (d) { // 진행 중인 라운드에 코스 불러오기 (⚙ 라운드 설정): 코스를 고르지 않고 시작한 라운드에 약도와 파·핸디캡·홀 정보를 채운다
-      var r = state.round; if (!r) return;
-      var c = findCourse(d.name, r.holes); if (!c) return;
-      if (!confirm("'" + c.name + "' 코스를 이 라운드에 불러올까요?\n파·핸디캡·홀 정보가 코스 값으로 바뀌고, 입력한 타수는 그대로 남아요." + (sharingActive() ? '\n함께하는 모든 참가자에게 적용됩니다.' : ''))) return;
-      applyCourse(r, c); save(); render();
-    },
     // 분석 화면
     'an-player': function (d) { state.anPid = d.pid; state.anHole = null; save(); render(); },
     'an-hole': function (d) { var i = Number(d.i); state.anHole = state.anHole === i ? null : i; save(); render(); },

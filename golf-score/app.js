@@ -1639,14 +1639,15 @@
     if (r.holes !== 18) return '';
     var back = A.playOrder(r).startBack;
     // 안내는 고른 값이 실제로 전해지는지에 맞춘다:
-    //  진행 중인 라운드 → 함께 보는 기기에 전해진다
+    //  진행 중이고 공유 중인 라운드 → 함께 보는 기기에 전해진다
+    //  진행 중이지만 공유하지 않는 라운드(혼자 쓰거나 공유에서 나간 기기) → 다른 기기 이야기를 하지 않는다
     //  호스트가 끝냈지만 내가 아직 열어 둔 공유 라운드 → 여전히 전송된다(아직 열어 둔 기기와, 종료 직후 잠시 연결을 유지하는 호스트의 기록에 닿는다)
     //  기록으로 저장된 라운드 → 이 기기에서만 바뀐다
-    var mine = r === state.round && !state.readOnly, live = mine && r.status !== 'finished', stillOpen = mine && !live && sharingActive();
+    var mine = r === state.round && !state.readOnly, live = mine && r.status !== 'finished', shared = mine && sharingActive();
     return '<div class="muted small" data-region="startnote" style="margin-top:8px">' + what + ' <b>' + (back ? '10번홀' : '1번홀') + ' 출발</b> 순서로 계산했어요' + (back ? '(18번홀 다음이 1번홀)' : '') +
-      '. 출발 홀이 다르면 📊 분석 화면의 "출발 홀"에서 고치세요. ' + (live ? '함께 보는 기기에도 똑같이 적용돼요.'
-        : stillOpen ? '이 라운드를 아직 열어 둔 기기에는 똑같이 적용돼요. 이미 기록으로 저장한 기기는 각자 고쳐 주세요.'
-          : '끝난 라운드에서 고치면 이 기기의 기록만 바뀌어요. 함께 본 기기는 각자 고쳐 주세요.') + '</div>';
+      '. 출발 홀이 다르면 📊 분석 화면의 "출발 홀"에서 고치세요.' + (live ? (shared ? ' 함께 보는 기기에도 똑같이 적용돼요.' : '')
+        : shared ? ' 이 라운드를 아직 열어 둔 기기에는 똑같이 적용돼요. 이미 기록으로 저장한 기기는 각자 고쳐 주세요.'
+          : ' 끝난 라운드에서 고치면 이 기기의 기록만 바뀌어요. 함께 본 기기는 각자 고쳐 주세요.') + '</div>';
   }
   /** 오장: 사람별 금액, 홀별 민판·배판, 배판 사유와 니어·버디 내역 */
   function tabOjang(r, all) {

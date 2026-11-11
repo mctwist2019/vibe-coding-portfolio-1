@@ -335,7 +335,11 @@
     });
     return out;
   }
-  /** 메모 번역표 (앱이 등록): 기본 제공 코스의 예전 문장형 메모 → 지금의 키워드 메모. 그 문장이 그대로 남은 칸만 읽을 때 바꿔 준다 */
+  /**
+   * 메모 번역표 (앱이 등록): 기본 제공 코스의 예전 문장형 메모 → 지금의 키워드 메모. 그 문장이 그대로 남은 칸만 읽을 때 바꿔 준다.
+   * 값은 키워드 문자열이거나 { m: 키워드, z: 위험 요소 비트 }. z는 그때 자료에는 표시가 없었지만 그 문장이 말하던 OB 쪽으로,
+   * 읽을 때 그 홀의 위험 요소에 더한다 → 예전 자료로 만든 라운드·저장 코스도 지금 자료와 똑같이 보이고, 공략 팁이 OB 쪽을 피한다
+   */
   var memoUpgrades = {};
   function setMemoUpgrades(map) { memoUpgrades = map && typeof map === 'object' ? map : {}; }
   var SHAPE_LABELS = { S: '직선', L: '좌 도그렉', R: '우 도그렉' };
@@ -347,17 +351,28 @@
    */
   var shapeSource = null;
   function setShapeSource(fn) { shapeSource = typeof fn === 'function' ? fn : null; }
+  /**
+   * 홀 정보가 비어 있을 때 대신 쓸 자료를 주는 함수 (앱이 등록). 코스 안내도 약도가 있는 코스 이름을 라운드에 붙이기만 한 경우
+   * (자료를 불러오지 않고 라운드 설정에서 이름만 적음)에도 그 코스의 거리·위험 요소·키워드가 보이게 한다. 저장된 값은 그대로 비어 있다.
+   * fn(round, h) → { dist, haz, memo } | null
+   */
+  var infoFallback = null;
+  function setInfoFallback(fn) { infoFallback = typeof fn === 'function' ? fn : null; }
   function holeInfo(round, h) {
     var i = (round.holeInfo && round.holeInfo[h]) || {};
+    if (infoFallback && !(i.dist || i.haz || i.memo)) i = infoFallback(round, h) || i;
     var dist = num(i.dist), haz = num(i.haz);
     var shape = shapeSource ? shapeSource(round, h) : undefined;
     if (shape === undefined) shape = i.shape;
     var memo = typeof i.memo === 'string' ? i.memo : '';
-    if (memo && Object.prototype.hasOwnProperty.call(memoUpgrades, memo) && typeof memoUpgrades[memo] === 'string') memo = memoUpgrades[memo];
+    haz = haz !== null && haz > 0 ? haz : 0;
+    var up = memo && Object.prototype.hasOwnProperty.call(memoUpgrades, memo) ? memoUpgrades[memo] : null;
+    if (typeof up === 'string') memo = up;
+    else if (up && typeof up.m === 'string') { memo = up.m; if (up.z > 0) haz |= up.z & 3; }
     return {
       dist: dist !== null && dist > 0 ? dist : null,
       shape: shape === 'S' || shape === 'L' || shape === 'R' ? shape : null,
-      haz: haz !== null && haz > 0 ? haz : 0,
+      haz: haz,
       memo: memo
     };
   }
@@ -413,8 +428,9 @@
       }
       if (bL && bR) tips.push('페어웨이 양쪽에 벙커가 있어요. 벙커에 못 미치는 클럽으로 끊어 가는 것도 방법이에요.');
       else if (!outDanger && !outBunker) {   // 바깥쪽이 막힌 도그렉은 위에서 이미 '가운데'로 안내했다
-        if (bL && !dangerR) tips.push('페어웨이 왼쪽 벙커를 피해 오른쪽으로 겨냥하세요.');
-        else if (bR && !dangerL) tips.push('페어웨이 오른쪽 벙커를 피해 왼쪽으로 겨냥하세요.');
+        // 한쪽이 OB·해저드라 이미 반대쪽을 겨냥하라고 했으면 벙커 때문에 같은 말을 또 하지 않는다
+        if (bL && !dangerL && !dangerR) tips.push('페어웨이 왼쪽 벙커를 피해 오른쪽으로 겨냥하세요.');
+        else if (bR && !dangerL && !dangerR) tips.push('페어웨이 오른쪽 벙커를 피해 왼쪽으로 겨냥하세요.');
       }
     }
     var aimed = par3 && tips.length > 0;   // 파3에서 이미 겨냥할 곳을 안내했으면 같은 샷에 대한 문장을 더 붙이지 않는다
@@ -454,7 +470,7 @@
   }
 
   return {
-    OB_COST: OB_COST, HZ_COST: HZ_COST, HAZ: HAZ, HAZ_LABELS: HAZ_LABELS, SHAPE_LABELS: SHAPE_LABELS, setShapeSource: setShapeSource,
+    OB_COST: OB_COST, HZ_COST: HZ_COST, HAZ: HAZ, HAZ_LABELS: HAZ_LABELS, SHAPE_LABELS: SHAPE_LABELS, setShapeSource: setShapeSource, setInfoFallback: setInfoFallback,
     HAZ_GROUPS: HAZ_GROUPS, hazLabels: hazLabels, MEMO_SEP: MEMO_SEP, memoWords: memoWords, setMemoUpgrades: setMemoUpgrades,
     stat: stat, playOrder: playOrder, playerStats: playerStats, roundStatus: roundStatus, coach: coach, teeMissSide: teeMissSide,
     holeInfo: holeInfo, hasHoleInfo: hasHoleInfo, holeLabels: holeLabels, holeTips: holeTips,

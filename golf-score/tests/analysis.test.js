@@ -255,14 +255,19 @@ test('built-in keyword memos: short keywords; old sentence memos read as keyword
       assert.ok(!/후기 참고/.test(memo), tag + ' no sentence prefix');
       // 위험 요소로 표시한 OB를 키워드에서 또 말하지 않는다 (요약 줄에 두 번 나오지 않게)
       if (info.haz & 3) assert.ok(!/OB/.test(memo), tag + ' OB is a hazard flag, not also a keyword');
-      // 번역표: 이 홀의 옛 문장은 이 홀의 키워드로 읽힌다. 더 들어 있는 말은 그때 자료에 표시가 없던 위험 요소·형태뿐이다
+      // 번역표: 이 홀의 옛 문장은 이 홀의 지금 키워드로 읽힌다 (예전 자료로 만든 라운드도 지금 자료와 똑같이 보이게)
       assert.match(old, /^후기 참고: /);
       assert.ok(Object.prototype.hasOwnProperty.call(up, old), tag + ' old sentence is in the upgrade table');
-      const legacy = A.memoWords(up[old]);
-      assert.equal(legacy.join(A.MEMO_SEP), up[old], tag + ' upgrade target is in keyword form');
-      words.forEach((w) => assert.ok(legacy.includes(w), tag + ' upgrade target keeps this hole\'s keyword: ' + w));
-      legacy.filter((w) => !words.includes(w)).forEach((w) => assert.match(w, /OB|해저드|그린 벙커|우측으로 휨/, tag + ' extra word in the upgrade target: ' + w));
-      legacy.forEach((w) => assert.ok(w.length <= 24, tag + ' legacy keyword too long: ' + w));
+      const target = up[old], tm = typeof target === 'string' ? target : target.m, tz = typeof target === 'string' ? 0 : target.z;
+      assert.equal(tm, memo, tag + ' old sentence reads as this hole\'s keywords');
+      // 사실 대조: 키워드의 숫자는 모두 옛 문장에 있던 숫자다
+      (memo.match(/\d+/g) || []).forEach((num) => assert.ok(old.includes(num), tag + ' number not in the old sentence: ' + num));
+      // OB: 크리크는 문장이 말한 쪽이 위험 요소 표시가 되었고, 예전 자료에는 그 표시가 없었으므로 번역표가 같은 비트를 더해 준다
+      const said = /좌우( 모두)? OB/.test(old) ? 3 : /우측 OB/.test(old) ? 2 : /좌측 OB/.test(old) ? 1 : 0;
+      if (c.name === '베어크리크 포천 · 크리크 (화이트티)') {
+        assert.equal((info.haz || 0) & 3, said, tag + ' OB flags say what the review sentence said');
+        assert.equal(tz, said, tag + ' the upgrade adds the same OB side to old data');
+      } else assert.equal(tz, 0, tag + ' no hazard upgrade where the built-in data has no flags');
       const clean = { id: 'r', holes: 9, date: 'd', createdAt: 1, name: 'n', pars: [4, 4, 4, 4, 4, 4, 4, 4, 4], strokeIndex: [1, 2, 3, 4, 5, 6, 7, 8, 9], players: [{ id: 'a', name: 'A', hcp: 0, team: '' }],
         scores: { a: new Array(9).fill(null) }, extras: {}, games: {}, status: 'live', rev: {}, course: '', holeInfo: { 0: { memo: old } } };
       S.diffAndStamp(clean, {}, S.createClock(() => 5), 'A');
@@ -276,13 +281,38 @@ test('built-in keyword memos: short keywords; old sentence memos read as keyword
   r.holeInfo = { 0: { memo: old }, 1: { memo: old + ' 추가' }, 2: { memo: 'toString' } };
   try {
     A.setMemoUpgrades(up);
-    assert.equal(A.holeInfo(r, 0).memo, up[old]);
+    assert.equal(A.holeInfo(r, 0).memo, typeof up[old] === 'string' ? up[old] : up[old].m);
     assert.equal(r.holeInfo[0].memo, old);
+    // OB 표시가 없던 예전 크리크 자료: 읽을 때 키워드와 함께 OB 쪽이 더해지고, 저장된 값은 그대로다
+    const creek = courses.find((x) => x.name === '베어크리크 포천 · 크리크 (화이트티)');
+    const o8 = v9[creek.name][7], oldHaz = creek.holeInfo[7].haz & ~3;
+    r.holeInfo[3] = { haz: oldHaz, memo: o8 };
+    assert.deepEqual(A.holeInfo(r, 3), { dist: null, shape: null, haz: creek.holeInfo[7].haz, memo: creek.holeInfo[7].memo });
+    assert.equal(r.holeInfo[3].haz, oldHaz);
+    assert.ok(A.holeLabels(r, 3).includes('OB 우'));
+    r.holeInfo[3].memo = o8 + '!';
+    assert.equal(A.holeInfo(r, 3).haz, oldHaz, 'a changed sentence gets no hazard upgrade');
     assert.equal(A.holeInfo(r, 1).memo, old + ' 추가');
     assert.equal(A.holeInfo(r, 2).memo, 'toString', 'inherited object keys are not treated as upgrades');
     A.setMemoUpgrades(null);
     assert.equal(A.holeInfo(r, 0).memo, old);
   } finally { A.setMemoUpgrades(null); }
+});
+
+test('hole info: an empty hole can read from a registered fallback (course name set without loading its data)', () => {
+  const r = mk(9, { a: [5] });
+  r.holeInfo = { 1: { memo: '내 메모' }, 2: { shape: 'L' } };
+  try {
+    A.setInfoFallback((round, h) => (h <= 2 ? { dist: 300 + h, haz: 3, memo: '기본 키워드' } : null));
+    assert.deepEqual(A.holeInfo(r, 0), { dist: 300, shape: null, haz: 3, memo: '기본 키워드' }, 'an empty hole reads the fallback');
+    assert.equal(A.holeInfo(r, 1).memo, '내 메모', 'a hole with its own data keeps it');
+    assert.equal(A.holeInfo(r, 1).dist, null);
+    assert.equal(A.holeInfo(r, 2).dist, 302, 'a shape alone does not count as data');
+    assert.deepEqual(A.holeInfo(r, 3), { dist: null, shape: null, haz: 0, memo: '' }, 'no fallback → empty as before');
+    assert.equal(r.holeInfo[0], undefined, 'storage stays empty');
+    assert.equal(A.hasHoleInfo(r, 0), true);
+  } finally { A.setInfoFallback(null); }
+  assert.equal(A.hasHoleInfo(r, 0), false);
 });
 
 test('built-in Creek course: tips never aim at a side its own data calls OB or hazard', () => {
@@ -297,7 +327,7 @@ test('built-in Creek course: tips never aim at a side its own data calls OB or h
     if (left) assert.doesNotMatch(tips, /왼쪽(으로| 절반을|을) 겨냥|가운데보다 왼쪽/, 'hole ' + (h + 1) + ' has danger on the left: ' + tips);
     if (right) assert.doesNotMatch(tips, /오른쪽(으로| 절반을|을) 겨냥|가운데보다 오른쪽/, 'hole ' + (h + 1) + ' has danger on the right: ' + tips);
   }
-  assert.ok(ob >= 12, 'OB sides from the reviews are hazard flags');
+  assert.equal(ob, 13, 'OB sides from the reviews are hazard flags on exactly the holes whose review sentence names an OB side');
 });
 
 // ───────────────────────── 코드 리뷰에서 확인된 문제의 회귀 테스트 ─────────────────────────

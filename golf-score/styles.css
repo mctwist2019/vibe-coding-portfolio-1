@@ -353,7 +353,8 @@ html.noscroll { overflow: hidden; } /* 약도 창이 열려 있는 동안 뒤 �
 .kws { display: flex; flex-wrap: wrap; gap: 4px 5px; }
 .kw { display: inline-block; max-width: 100%; padding: 1px 9px; border-radius: 12px; background: rgba(29, 107, 58, .1); color: var(--primary-dark); font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 .chip.kwchip { display: inline-flex; align-items: center; max-width: 100%; padding: 0 2px 0 12px; border-radius: 18px; }
-.kwchip .t { min-width: 0; padding: 6px 0; overflow-wrap: anywhere; }
+.kwchip .t { min-width: 0; padding: 6px 0; word-break: keep-all; overflow-wrap: anywhere; }
+.kw { word-break: keep-all; } /* 두 줄이 될 때 낱말 중간이 아니라 띄어쓴 곳에서 꺾는다 (띄어쓰기 없는 긴 글은 overflow-wrap이 꺾는다) */
 .kwchip .x { flex: 0 0 auto; width: 34px; min-height: 34px; border: 0; background: transparent; color: var(--muted); font-size: 13px; border-radius: 50%; }
 .kwadd { display: flex; gap: 6px; margin-top: 6px; }
 .kwadd input { flex: 1 1 auto; min-width: 0; }

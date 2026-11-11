@@ -68,7 +68,7 @@
       stableford: { enabled: true, net: true },
       // fund(공금 방식)는 여기서는 꺼 둔다: 이 값은 예전에 만든 라운드에 빠진 설정을 채우는 데도 쓰이므로, 그 라운드들의 돈 계산이 바뀌면 안 된다.
       // 새 라운드는 newDraft에서 공금 방식을 켠 채로 시작한다
-      skins: { enabled: false, net: false, mode: 'individual', unit: 1000, fund: false, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, oecd: false, fine: 10000 },
+      skins: { enabled: false, net: false, mode: 'individual', unit: 1000, fund: false, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, collect: false, oecd: false, fine: 10000 },
       ojang: { enabled: false, net: false, unit: 5000, carry: true, birdie: true, near: true },
       match: { enabled: false, net: false, mode: 'individual', unit: 1000 },
       nassau: { enabled: false, net: false, mode: 'individual', unit: 5000 },
@@ -81,7 +81,7 @@
   function newPlayer() { return { id: uid(), name: '', hcp: 0, team: '' }; }
   function newDraft() {
     var g = defaultGames();
-    g.skins.fund = true; g.skins.oecd = true; // 새 라운드의 스킨스는 공금 방식 + OECD 룰로 시작 (스킨스 정산을 켜야 실제로 반영된다)
+    g.skins.fund = true; g.skins.oecd = true; g.skins.collect = true; // 새 라운드의 스킨스는 공금 방식 + OECD 룰로 시작 (스킨스 정산을 켜야 실제로 반영된다)
     return { name: '', course: '', date: today(), holes: 18, players: [newPlayer(), newPlayer(), newPlayer(), newPlayer()], games: g };
   }
   /** 모든 게임 계산. 홀을 친 순서(10번홀 출발 등)를 넘겨 스킨스 이월·OECD 가입·오장의 '앞 홀'이 실제 순서를 따르게 한다 */
@@ -1193,11 +1193,14 @@
           fundRow('시작할 때 플레이어 각각', P + 'skins.start', sk.start, 1000, !sk.enabled) +
           fundRow('시작할 때 캐디', P + 'skins.tip', sk.tip, 1000, !sk.enabled) +
           fundRow('캐디피', P + 'skins.caddie', sk.caddie, 10000, !sk.enabled) + '</div>' +
+          toggle(P + 'skins.collect', sk.collect, '공금을 미리 걷음 <span class="muted small" style="font-weight:500">돈을 걷고 시작 지급도 함</span>') +
+          '<span class="optbreak"></span>' +
           toggle(P + 'skins.oecd', sk.oecd, 'OECD 룰 <span class="muted small" style="font-weight:500">본전 찾은 사람 벌금</span>') +
           (sk.oecd ? '<div class="fundgrid">' + fundRow('벌금 (걸린 항목마다)', P + 'skins.fine', sk.fine, 1000, !sk.enabled) + '</div>' : '') +
           '<span class="optnote">각자 낸 돈을 모은 공금에서 시작할 때 플레이어와 캐디에게 나눠 주고, 홀 상금을 승자에게 줘요. ' +
           (sk.oecd ? '공금에서 받은 돈이 낸 돈 이상이 된 사람(OECD 가입)이 <b>OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상</b>을 하면 항목마다 벌금을 공금에 넣어요. OB·벙커·해저드·퍼트는 📝 상세 기록에 입력한 값으로 판정합니다. ' : '') +
-          '끝나면 남은 공금으로 캐디피를 내고, 모자라면 똑같이 나눠 내요. 돈을 미리 걷거나 홀마다 나눠 주지 않아도 리더보드에서 한 번에 정리됩니다.</span>'
+          '끝나면 남은 공금으로 캐디피를 내고, 모자라면 똑같이 나눠 내요. 홀마다 돈을 나눠 주지 않아도 리더보드에 누가 얼마를 가져갔는지 쌓이고, 끝나고 한 번에 나누면 됩니다. ' +
+          (sk.collect ? '<b>미리 걷음</b>: 정산은 걷어 둔 돈에서 누구에게 얼마를 줄지로 나와요.' : '<b>안 걷음</b>: 정산은 누가 누구에게(캐디 포함) 얼마를 보낼지로 나와요.') + '</span>'
         : '<span class="lab">스킨당</span>' + numField(P + 'skins.unit', sk.unit, '원', 100, !sk.enabled) + '<span class="optnote">스킨 하나에 다른 사람 각각이 이 금액을 줘요.</span>'));
     // 오장: 홀마다 타수 차 × 타당 금액, 조건에 따라 배판. 이름은 기본 금액 5천 원에서 왔고 금액은 바꿀 수 있다
     html += gameCard('오장 <span class="muted small" style="font-weight:500">타당 스트로크 · 배판</span>',
@@ -1510,7 +1513,7 @@
     var sub = '<div class="muted small" style="margin:-4px 0 8px">' + (team ? '팀' : '개인') + (res.net ? ' · 네트' : '') +
       (f ? ' · 공금: 각자 ' + won(f.stake) + ' · 홀당 상금 ' + won(f.prize) + (f.oecd ? ' · OECD 벌금 ' + won(f.fine) : '') : (res.unit ? ' · 스킨당 ' + won(res.unit) : '')) + '</div>';
     if (res.error) return '<div class="card">' + head + sub + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 팀을 지정하세요.');
-    var done = holesDone(r) === r.holes;
+    var done = holesDone(r) === r.holes || !!state.readOnly;
     var html = '<div class="card">' + head + sub + '<table' + (f ? ' class="fund"' : '') + '><thead><tr><th class="l">' + (team ? '팀' : '플레이어') + '</th><th>스킨</th><th>' + (f ? '받은 돈' : '금액') + '</th>' + (f ? '<th>최종</th>' : '') + '</tr></thead><tbody>';
     if (f) {
       res.entrants.forEach(function (e) {
@@ -1566,8 +1569,25 @@
         return line(esc(e.name), won(e.take), bits.join(' · '));
       }).join('') +
       (f.caddieTotal ? line('캐디', won(f.caddieTotal), (f.tip ? '시작 ' + won(f.tip) : '') + (f.tip && f.caddie ? ' · ' : '') + (f.caddie ? '캐디피 ' + won(f.caddie) : '')) : '') +
-      '</div><div class="muted small" style="margin-top:8px">' + (done ? '' : '라운드 중이라 지금까지 친 홀 기준이에요. 남은 홀의 상금은 아직 공금에 있는 것으로 계산합니다. ') +
-      '돈을 미리 걷지 않았어도 💰 정산 탭의 송금 정리대로 주고받으면 됩니다. 이 장부는 라운드 기록에 함께 남아요.</div></div>';
+      '</div>';
+    // 끝나고 실제로 오갈 돈. 공금을 미리 걷었으면 걷어 둔 돈에서 나눠 주는 금액, 안 걷었으면 정산 탭의 송금 정리를 쓴다
+    var shareTxt = f.rest > 0 ? ' + 남는 돈 ' + won(Math.round(f.share)) : f.rest < 0 ? ' − 모자란 돈 ' + won(Math.round(-f.share)) : '';
+    html += '<h2 style="margin-top:14px">' + (done ? '끝나고 나눌 돈' : '지금 끝내면 나눌 돈') + '</h2>' +
+      ('<div class="seg" style="margin-bottom:8px"><button type="button" data-action="fund-collect" data-v="1" class="' + (f.collect ? 'active' : '') + '">공금을 걷었어요</button>' +
+        '<button type="button" data-action="fund-collect" data-v="0" class="' + (f.collect ? '' : 'active') + '">안 걷었어요</button></div>');
+    if (f.collect) {
+      html += '<div class="stack">' + line('걷어 둔 돈', won(f.cash), '공금 ' + won(f.total) + (f.startOut ? ' − 시작 지급 ' + won(f.startOut) : '')) +
+        res.entrants.map(function (e) {
+          var d = Math.round(e.due), note = '상금 ' + won(e.prize) + (e.fines ? ' − 벌금 ' + won(e.fines) : '') + shareTxt;
+          return d >= 0 ? line('→ ' + esc(e.name), won(d), note) : line(esc(e.name), won(-d) + ' 더 내요', note, 'neg');
+        }).join('') +
+        (f.caddieDue ? line('→ 캐디', won(f.caddieDue), '캐디피') : '') + '</div>' +
+        '<div class="muted small" style="margin-top:8px">각자 ' + won(f.stake) + '을 걷고 시작 지급도 이미 준 것으로 보고, 걷어 둔 돈에서 나눠 줄 금액이에요. 다른 게임까지 합친 송금은 💰 정산 탭에 있어요.</div>';
+    } else {
+      html += '<div class="muted small">돈을 걷지 않았으면 💰 정산 탭의 송금 정리대로 주고받으면 됩니다. 캐디에게 줄 돈 ' + won(f.caddieDue) + '(시작 지급 + 캐디피)도 거기에 "→ 캐디"로 들어 있어요.</div>';
+    }
+    html += '<div class="muted small" style="margin-top:8px">' + (done ? '' : '라운드 중이라 지금까지 친 홀 기준이에요. 남은 홀의 상금은 아직 공금에 있는 것으로 계산합니다. ') +
+      '이 장부는 라운드 기록에 함께 남아요.</div></div>';
     return html;
   }
 
@@ -1704,7 +1724,13 @@
     html += '<div class="card"><h2>송금 정리 <span class="hint">최소 횟수로 정산</span></h2>' +
       (s.payments.length ? s.payments.map(function (p) { return '<div class="payline"><span><b>' + esc(payName(r, p.from)) + '</b> → <b>' + esc(payName(r, p.to)) + '</b></span><span class="amt">' + won(p.amount) + '</span></div>'; }).join('') : '<div class="muted">정산할 금액이 없습니다.' + (included.length ? '' : ' 각 게임 탭의 "정산 포함"을 켜거나 설정에서 금액을 정하세요.') + '</div>') +
       '</div>';
-    if (all.skins && all.skins.enabled && all.skins.fund) html += '<div class="notice">스킨스 공금은 각자 낸 돈 ' + won(all.skins.fund.stake) + '과 캐디 몫 ' + won(all.skins.fund.caddieTotal) + '까지 넣어 정리했어요. 돈을 미리 걷지 않았다면 위 송금대로만 주고받으면 되고, 캐디에게 줄 돈은 "→ 캐디" 줄에 모입니다. 자세한 내역은 스킨스 탭의 공금 장부에 있어요.</div>';
+    if (all.skins && all.skins.enabled && all.skins.fund) {
+      var fd = all.skins.fund;
+      html += '<div class="notice">' + (fd.collect
+        ? '스킨스 공금은 <b>미리 걷은 것</b>으로 정리했어요. 각자 ' + won(fd.stake) + '을 냈고 시작 지급도 이미 준 것으로 보고, "공금 →" 줄은 걷어 둔 ' + won(fd.cash) + '에서 나눠 줄 돈입니다. 걷지 않았다면 스킨스 탭 공금 장부에서 "안 걷었어요"를 고르세요.'
+        : '스킨스 공금은 <b>걷지 않은 것</b>으로 정리했어요. 위 송금대로만 주고받으면 되고, 캐디에게 줄 돈 ' + won(fd.caddieDue) + '(시작 지급 + 캐디피)은 "→ 캐디" 줄에 모입니다. 미리 걷었다면 스킨스 탭 공금 장부에서 "공금을 걷었어요"를 고르세요.') +
+        ' 손익은 낸 돈과 캐디 몫까지 넣은 금액이에요.</div>';
+    }
     if (!state.readOnly && holesDone(r) < r.holes) html += '<div class="notice">아직 ' + (r.holes - holesDone(r)) + '홀이 남았어요. 매치/나소 금액은 매치가 끝나야 확정됩니다.</div>';
     html += '<button class="btn block" data-action="share-text">결과 복사 / 공유</button>';
     return html;
@@ -1963,6 +1989,7 @@
       lines.push('  공금 ' + won(fd.total) + ' (각자 ' + won(fd.stake) + ')' + (fd.startOut ? ' · 시작 지급 ' + won(fd.startOut) : '') + ' · 홀 상금 ' + won(fd.paid) + (fd.fines ? ' · OECD 벌금 +' + won(fd.fines) : '') +
         (fd.caddie ? ' · 캐디피 ' + won(fd.caddie) : '') + (fd.rest >= 0 ? ' · 남는 돈 ' + won(fd.rest) : ' · 모자란 돈 ' + won(-fd.rest) + ' (1인당 ' + won(Math.round(-fd.share)) + ')'));
       lines.push('  가져간 돈: ' + all.skins.entrants.map(function (e) { return e.name + ' ' + won(e.take); }).join(', ') + (fd.caddieTotal ? ', 캐디 ' + won(fd.caddieTotal) : ''));
+      if (fd.collect) lines.push('  끝나고 나눌 돈(걷어 둔 ' + won(fd.cash) + '): ' + all.skins.entrants.map(function (e) { var d = Math.round(e.due); return e.name + ' ' + (d >= 0 ? won(d) : won(-d) + ' 더 냄'); }).join(', ') + (fd.caddieDue ? ', 캐디 ' + won(fd.caddieDue) : ''));
     }
     if (all.ojang && all.ojang.enabled && !all.ojang.error) lines.push('', '🧾 오장(타당 ' + won(all.ojang.unit) + '): ' + all.ojang.rows.map(function (x) { return x.name + ' ' + signedWon(x.amount); }).join(', '));
     if (all.match && !all.match.error) { lines.push('', '⚔️ 매치:'); all.match.matches.forEach(function (m) { lines.push('  ' + m.a.name + ' vs ' + m.b.name + ' — ' + m.status.text + (m.status.leader ? ' (' + (m.status.leader === 'A' ? m.a.name : m.b.name) + ')' : '')); }); }
@@ -2110,6 +2137,10 @@
     'toggle-money': function (d) {
       var r = state.round; if (!r || state.readOnly || !r.games[d.key]) return;
       r.games[d.key].enabled = !r.games[d.key].enabled; save(); render();
+    },
+    'fund-collect': function (d) { // 공금을 미리 걷었는지: 손익은 그대로이고 송금 정리만 달라진다. 끝난 기록에서도 바꿀 수 있다(그 기기에서만)
+      var r = getRound(); if (!r || !r.games || !r.games.skins) return;
+      r.games.skins.collect = d.v === '1'; save(); render();
     },
     'toggle-bonus': function (d) {
       var r = state.round; if (!r || ['nearest', 'longest', 'birdie'].indexOf(d.type) < 0) return;

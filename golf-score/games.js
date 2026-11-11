@@ -294,6 +294,7 @@
     var stake = wonAmount(opt.stake), prize = wonAmount(opt.prize), caddie = wonAmount(opt.caddie), fine = wonAmount(opt.fine);
     var start = wonAmount(opt.start), tip = wonAmount(opt.tip);
     var oecd = fundOn && !!opt.oecd;
+    var collect = fundOn && !!opt.collect; // 공금을 실제로 걷고 시작 지급도 이미 한 경우: 남은 송금은 걷어 둔 돈에서 나눠 주는 것이 된다
     var order = holeOrder(round, opt.order);
     var res = { entrants: [], holes: [], carry: 0, transfers: [], error: null, fund: null };
     if (ents.length < 2) { res.error = opt.mode === 'team' ? '팀이 2개 이상 필요합니다' : '플레이어가 2명 이상 필요합니다'; return res; }
@@ -360,16 +361,29 @@
     var left = total - startOut - paid + fines;           // 캐디피를 내기 전 공금에 남은 돈
     var rest = left - caddie, share = rest / n;           // 캐디피를 낸 뒤: 남으면(+) 똑같이 돌려받고 모자라면(−) 똑같이 더 낸다
     res.fund = { stake: stake, prize: prize, start: start, tip: tip, caddie: caddie, fine: fine, oecd: oecd, players: n,
-      total: total, startOut: startOut, paid: paid, fines: fines, left: left, rest: rest, share: share, caddieTotal: tip + caddie };
+      total: total, startOut: startOut, paid: paid, fines: fines, left: left, rest: rest, share: share, caddieTotal: tip + caddie,
+      // 끝나고 실제로 오갈 돈: 미리 걷었으면 봉투에 남은 돈(공금 − 시작 지급)에서 나눠 주고 캐디에게는 캐디피만, 안 걷었으면 처음부터 전부
+      collect: collect, cash: collect ? total - startOut : 0, caddieDue: collect ? caddie : tip + caddie };
     res.entrants = ents.map(function (e) {
-      var take = held(e);
-      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id], start: start, prize: got[e.id], fines: fined[e.id], take: take, final: take - stake + share, oecd: isMember(e) };
+      var take = held(e), fin = take - stake + share;
+      // due: 끝나고 이 사람에게 줄 돈(+) 또는 이 사람이 낼 돈(−). 미리 걷었으면 낸 돈과 시작 지급은 이미 오간 것으로 본다
+      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id], start: start, prize: got[e.id], fines: fined[e.id], take: take, final: fin,
+        due: collect ? fin + stake - start : fin, oecd: isMember(e) };
     }).sort(function (a, b) { return b.skins - a.skins || b.final - a.final; });
     res.entrants.forEach(function (e) {
       if (e.final > 0) res.transfers.push({ from: '#pot', to: e.pids[0], amount: e.final, game: 'skins', note: '스킨스 공금 정산' });
       else if (e.final < 0) res.transfers.push({ from: e.pids[0], to: '#pot', amount: -e.final, game: 'skins', note: '스킨스 공금 정산' });
     });
     if (tip + caddie > 0) res.transfers.push({ from: '#pot', to: '#caddie', amount: tip + caddie, game: 'skins', note: '캐디 (시작 지급 + 캐디피)' });
+    // 이미 오간 돈 (미리 걷은 경우): 손익은 그대로 두고, 송금 정리에서만 뺀다
+    if (collect) {
+      res.done = [];
+      res.entrants.forEach(function (e) {
+        if (stake > 0) res.done.push({ from: e.pids[0], to: '#pot', amount: stake });
+        if (start > 0) res.done.push({ from: '#pot', to: e.pids[0], amount: start });
+      });
+      if (tip > 0) res.done.push({ from: '#pot', to: '#caddie', amount: tip });
+    }
     return res;
   }
 
@@ -687,20 +701,33 @@
    * '#'으로 시작하는 id는 가상 계정이다('#pot' 스킨스 펀드, '#caddie' 캐디피). 손익 표(rows)에는 넣지 않고,
    * 송금 정리(payments)에는 그대로 나온다 → 캐디피처럼 사람들 밖으로 나가는 돈도 누가 얼마를 낼지 정리된다
    */
-  function settle(transfers, players) {
+  function settle(transfers, players, done) {
     var net = {}, paid = {}, received = {}, byGame = {};
     players.forEach(function (p) { net[p.id] = 0; paid[p.id] = 0; received[p.id] = 0; byGame[p.id] = {}; });
-    transfers.forEach(function (t) {
+    function pseudo(t) {
       [t.from, t.to].forEach(function (id) {
         if (typeof id === 'string' && id.charAt(0) === '#' && !(id in net)) { net[id] = 0; paid[id] = 0; received[id] = 0; byGame[id] = {}; }
       });
+    }
+    transfers.forEach(function (t) {
+      pseudo(t);
       if (!(t.from in net) || !(t.to in net)) return;
       net[t.from] -= t.amount; net[t.to] += t.amount;
       paid[t.from] += t.amount; received[t.to] += t.amount;
       byGame[t.from][t.game] = (byGame[t.from][t.game] || 0) - t.amount;
       byGame[t.to][t.game] = (byGame[t.to][t.game] || 0) + t.amount;
     });
-    var payments = simplify(net);
+    // 송금 정리는 '아직 오가지 않은 돈'만: 이미 오간 돈(done, 예: 미리 걷은 공금과 시작 지급)을 손익에서 뺀 잔액으로 만든다. 손익(rows)은 그대로다
+    var bal = {};
+    Object.keys(net).forEach(function (id) { bal[id] = net[id]; });
+    (done || []).forEach(function (t) {
+      pseudo(t);
+      if (!(t.from in net) || !(t.to in net)) return;
+      if (!(t.from in bal)) bal[t.from] = net[t.from];
+      if (!(t.to in bal)) bal[t.to] = net[t.to];
+      bal[t.from] += t.amount; bal[t.to] -= t.amount;
+    });
+    var payments = simplify(bal);
     var rows = players.map(function (p) {
       return { id: p.id, name: p.name, net: Math.round(net[p.id]), paid: Math.round(paid[p.id]), received: Math.round(received[p.id]), byGame: byGame[p.id] };
     }).sort(function (a, b) { return b.net - a.net; });
@@ -738,11 +765,12 @@
     var g = round.games || {};
     var order = ctx && ctx.order; // 홀을 친 순서 (앱이 analysis.js의 playOrder로 넘겨 준다)
     function withOrder(o) { var c = {}; Object.keys(o || {}).forEach(function (k) { c[k] = o[k]; }); c.order = order; return c; }
-    var out = { transfers: [] };
+    var out = { transfers: [] }, done = [];
     function add(key, res, included) {
       res.enabled = !!included;
       out[key] = res;
       if (included && res.transfers && !res.error) out.transfers = out.transfers.concat(res.transfers);
+      if (included && res.done && !res.error) done = done.concat(res.done);
     }
     add('stroke', strokePlay(round, g.stroke || {}), true);
     out.stableford = stableford(round, g.stableford || {});
@@ -756,7 +784,7 @@
     var bonus = bonuses(round, b);
     out.bonus = bonus;
     if (b.nearest || b.longest || b.birdie) out.transfers = out.transfers.concat(bonus.transfers);
-    out.settlement = settle(out.transfers, round.players);
+    out.settlement = settle(out.transfers, round.players, done);
     return out;
   }
 

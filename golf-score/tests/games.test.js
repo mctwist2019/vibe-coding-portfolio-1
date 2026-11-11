@@ -240,7 +240,7 @@ test('skins fund: stakes make the fund, start hand-outs and hole prizes come out
   const r = oecdRound({ a: [3, 3, 4, 5], b: [4, 4, 4, 4], c: [4, 4, 4, 5], d: [5, 5, 5, 5] });
   const res = G.skins(r, FUND);
   assert.deepEqual(res.fund, { stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, fine: 10000, oecd: false, players: 4,
-    total: 400000, startOut: 50000, paid: 80000, fines: 0, left: 270000, rest: 120000, share: 30000, caddieTotal: 160000 });
+    total: 400000, startOut: 50000, paid: 80000, fines: 0, left: 270000, rest: 120000, share: 30000, caddieTotal: 160000, collect: false, cash: 0, caddieDue: 160000 });
   assert.deepEqual(skinsOf(res), { a: 2, b: 2, c: 0, d: 0 });
   assert.equal(res.holes[3].amount, 40000, 'a carried skin doubles the prize');
   const e = Object.fromEntries(res.entrants.map((x) => [x.id, x]));
@@ -328,6 +328,48 @@ test('skins fund OECD: a fine never exceeds what the player holds; ties and unpl
   assert.equal(res.holes[2].played, false); assert.equal(res.holes[2].oecd, undefined, 'a hole that is not fully entered is not judged');
   assert.deepEqual([res.fund.total, res.fund.paid, res.fund.fines, res.fund.left], [60000, 20000, 20000, 60000]);
   assert.deepEqual(finalOf(res), { a: 0 - 20000 + 20000, b: -20000 + 20000, c: -20000 + 20000 });
+});
+
+test('skins fund collected up front: profit and loss stay the same, the payments hand out what is in the envelope', () => {
+  const r = oecdRound({ a: [3, 3, 3, 3, 3, 5], b: [4, 4, 4, 4, 4, 4], c: [4, 4, 4, 4, 4, 5], d: [5, 5, 5, 5, 5, 5] }, { a: { 5: { ob: 1, pt: 3 } } });
+  r.games = { skins: Object.assign({ enabled: true, oecd: true }, FUND) };
+  const off = G.computeAll(r);
+  r.games.skins.collect = true;
+  const on = G.computeAll(r);
+  // 손익은 걷었든 안 걷었든 같다
+  assert.deepEqual(on.settlement.rows, off.settlement.rows);
+  assert.deepEqual(finalOf(on.skins), { a: 15000, b: -45000, c: -65000, d: -65000 });
+  // 걷어 둔 돈 = 공금 − 시작 지급. 끝나고 줄 돈 = 상금 − 벌금 + 남는 돈의 1/4, 캐디에게는 캐디피만
+  assert.deepEqual([on.skins.fund.collect, on.skins.fund.cash, on.skins.fund.caddieDue], [true, 350000, 150000]);
+  assert.deepEqual(Object.fromEntries(on.skins.entrants.map((e) => [e.id, e.due])), { a: 105000, b: 45000, c: 25000, d: 25000 });
+  assert.deepEqual(Object.fromEntries(off.skins.entrants.map((e) => [e.id, e.due])), finalOf(off.skins), 'not collected: what is due is the profit or loss itself');
+  assert.deepEqual([off.skins.fund.collect, off.skins.fund.cash, off.skins.fund.caddieDue, off.skins.done], [false, 0, 160000, undefined]);
+  const pay = Object.fromEntries(on.settlement.payments.map((p) => [p.from + '>' + p.to, p.amount]));
+  assert.deepEqual(pay, { '#pot>#caddie': 150000, '#pot>a': 105000, '#pot>b': 45000, '#pot>c': 25000, '#pot>d': 25000 });
+  assert.equal(on.settlement.payments.reduce((t, p) => t + p.amount, 0), 350000, 'exactly the money in the envelope is handed out');
+  // 모자랄 때: 봉투의 돈은 캐디피와 딴 사람에게 가고, 모자란 만큼은 못 딴 사람이 더 낸다
+  r.games.skins.caddie = 300000;
+  const short = G.computeAll(r);
+  assert.deepEqual(Object.fromEntries(short.skins.entrants.map((e) => [e.id, e.due])), { a: 67500, b: 7500, c: -12500, d: -12500 });
+  const bal = {};
+  short.settlement.payments.forEach((p) => { bal[p.from] = (bal[p.from] || 0) - p.amount; bal[p.to] = (bal[p.to] || 0) + p.amount; });
+  assert.deepEqual(bal, { '#pot': -350000, '#caddie': 300000, a: 67500, b: 7500, c: -12500, d: -12500 });
+  // 다른 게임(오장)과 합쳐도 송금 뒤에는 모두의 잔액이 맞는다
+  r.games.skins.caddie = 150000; r.games.ojang = { enabled: true, unit: 1000 };
+  const both = G.computeAll(r);
+  const want = { '#pot': -350000, '#caddie': 150000 };
+  both.settlement.rows.forEach((x) => { want[x.id] = x.net + 100000 - 10000; });
+  const got = {};
+  both.settlement.payments.forEach((p) => { got[p.from] = (got[p.from] || 0) - p.amount; got[p.to] = (got[p.to] || 0) + p.amount; });
+  Object.keys(want).forEach((k) => assert.equal(got[k] || 0, want[k], k));
+  // 공금 방식이 꺼져 있거나 팀전이면 '미리 걷음'은 아무 일도 하지 않는다
+  r.games.ojang.enabled = false; r.games.skins.fund = false;
+  const plain = G.computeAll(r);
+  assert.equal(plain.skins.done, undefined); assert.ok(plain.settlement.payments.every((p) => p.from.charAt(0) !== '#' && p.to.charAt(0) !== '#'));
+  // settle: 이미 오간 돈은 손익이 아니라 송금 정리에서만 빠진다
+  const st = G.settle([{ from: 'a', to: 'b', amount: 5000, game: 'x' }], [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], [{ from: 'a', to: 'b', amount: 5000 }]);
+  assert.deepEqual(st.rows.map((x) => x.net), [5000, -5000]); assert.deepEqual(st.payments, []);
+  assert.deepEqual(G.settle([{ from: 'a', to: 'b', amount: 5000, game: 'x' }], [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], [{ from: 'zz', to: 'b', amount: 1 }]).payments, [{ from: 'a', to: 'b', amount: 5000 }], 'unknown ids are ignored');
 });
 
 test('play order: a round that starts on hole 10 carries skins, OECD membership and the 오장 all-square rule from 18 to 1', () => {

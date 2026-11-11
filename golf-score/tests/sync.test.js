@@ -431,18 +431,20 @@ test('shot count (st:<pid>:<h>:sh) syncs like the other detail stats', () => {
   assert.deepEqual(b.stats.a[2], { pt: 2 });
 });
 
-test('game settings for the OECD rule are validated like the others', () => {
+test('new game settings (skins fund and OECD, 오장, double-par cap) are validated like the others', () => {
   const r = { id: 'r', holes: 18, date: 'd', createdAt: 1, name: 'n', pars: Array(18).fill(4), strokeIndex: Array.from({ length: 18 }, (_, i) => i + 1),
     players: [{ id: 'a', name: 'A', hcp: 0, team: '' }], scores: { a: Array(18).fill(null) }, extras: {}, status: 'live', rev: {},
-    games: { skins: { enabled: true, net: false, mode: 'individual', unit: 1000, oecd: true, join: 5 } } };
-  assert.equal(S.GAME_SCHEMA.skins.oecd, 'bool');
-  assert.ok(S.allKeys(r).includes('gm:skins:oecd') && S.allKeys(r).includes('gm:skins:join'));
-  assert.equal(S.getKey(r, 'gm:skins:join'), 5);
-  assert.equal(S.setKey(r, 'gm:skins:join', 3), true); assert.equal(r.games.skins.join, 3);
-  assert.equal(S.setKey(r, 'gm:skins:join', 99), true); assert.equal(r.games.skins.join, 18, 'clamped to the number of holes at most');
-  assert.equal(S.setKey(r, 'gm:skins:join', 'x'), false); assert.equal(r.games.skins.join, 18);
-  assert.equal(S.setKey(r, 'gm:skins:oecd', 'maybe'), false); assert.equal(r.games.skins.oecd, true);
-  assert.equal(S.setKey(r, 'gm:skins:oecd', false), true); assert.equal(r.games.skins.oecd, false);  // 오장 설정과 양파 한도
+    games: { skins: { enabled: true, net: false, mode: 'individual', unit: 1000, fund: true, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, oecd: true, fine: 10000 } } };
+  assert.deepEqual(Object.keys(S.GAME_SCHEMA.skins).sort(), ['caddie', 'enabled', 'fine', 'fund', 'mode', 'net', 'oecd', 'prize', 'stake', 'start', 'tip', 'unit']);
+  ['fund', 'stake', 'prize', 'start', 'tip', 'caddie', 'oecd', 'fine'].forEach((f) => assert.ok(S.allKeys(r).includes('gm:skins:' + f), f));
+  assert.equal(S.getKey(r, 'gm:skins:stake'), 100000);
+  assert.equal(S.setKey(r, 'gm:skins:stake', 50000), true); assert.equal(r.games.skins.stake, 50000);
+  assert.equal(S.setKey(r, 'gm:skins:prize', -1), true); assert.equal(r.games.skins.prize, 0, 'money is clamped at zero');
+  assert.equal(S.setKey(r, 'gm:skins:caddie', 'x'), false); assert.equal(r.games.skins.caddie, 150000);
+  assert.equal(S.setKey(r, 'gm:skins:fund', 'maybe'), false); assert.equal(r.games.skins.fund, true);
+  assert.equal(S.setKey(r, 'gm:skins:oecd', false), true); assert.equal(r.games.skins.oecd, false);
+  assert.equal(S.setKey(r, 'gm:skins:join', 3), false, 'no such setting');
+  // 오장 설정과 양파 한도
   assert.deepEqual(Object.keys(S.GAME_SCHEMA.ojang).sort(), ['birdie', 'carry', 'enabled', 'near', 'net', 'unit']);
   assert.equal(S.setKey(r, 'gm:ojang:unit', 5000), true); assert.equal(r.games.ojang.unit, 5000);
   assert.equal(S.setKey(r, 'gm:ojang:unit', -1), true); assert.equal(r.games.ojang.unit, 0, 'money is clamped at zero');

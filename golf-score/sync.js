@@ -25,7 +25,7 @@
   var GAME_SCHEMA = {
     stroke: { enabled: 'bool', net: 'bool', unit: 'money', cap: 'bool' },
     stableford: { enabled: 'bool', net: 'bool' },
-    skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money', oecd: 'bool', join: 'skins' },
+    skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money', fund: 'bool', stake: 'money', prize: 'money', start: 'money', tip: 'money', caddie: 'money', oecd: 'bool', fine: 'money' },
     ojang: { enabled: 'bool', net: 'bool', unit: 'money', carry: 'bool', birdie: 'bool', near: 'bool' },
     match: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
     nassau: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
@@ -126,7 +126,6 @@
       case 'money': { var m = clampInt(v, 0, 100000000); return m === null ? undefined : m; }
       case 'mode': return v === 'individual' || v === 'team' ? v : undefined;
       case 'count': return v === 1 || v === 2 ? v : undefined;
-      case 'skins': { var n = clampInt(v, 1, 18); return n === null ? undefined : n; } // OECD 가입 기준(딴 스킨 수)
     }
     return undefined;
   }

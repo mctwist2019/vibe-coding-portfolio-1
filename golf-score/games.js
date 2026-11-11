@@ -249,7 +249,6 @@
    * 한 홀에서 같은 항목은 여러 번 해도 한 번으로 센다
    */
   var OECD_ITEMS = [['ob', 'OB'], ['bk', '벙커'], ['hz', '해저드'], ['pt3', '3퍼트'], ['tri', '트리플']];
-  var OECD_JOIN = 5; // 가입 기준(딴 스킨 수)의 기본값: 4명 18홀이면 본전이 4.5개
   function oecdFaults(round, pid, h) {
     var st = (round.stats && round.stats[pid] && round.stats[pid][h]) || {}, out = [];
     if (st.ob > 0) out.push('ob');
@@ -260,71 +259,117 @@
     if (g !== null && g - round.pars[h] >= 3) out.push('tri');
     return out;
   }
-  function oecdJoin(v) { v = Math.round(Number(v)); return v >= 1 && v <= 18 ? v : OECD_JOIN; }
+  function wonAmount(v) { v = Math.round(Number(v)); return v > 0 ? v : 0; }
+  /** 홀을 친 순서. order가 0..holes-1을 한 번씩 담은 배열이면 그대로, 아니면 홀 번호 순 */
+  function holeOrder(round, order) {
+    var n = round.holes, natural = [], seen = {}, ok = Array.isArray(order) && order.length === n;
+    for (var i = 0; i < n; i++) natural.push(i);
+    if (ok) order.forEach(function (h) { if (!(h >= 0 && h < n) || h !== Math.floor(h) || seen[h]) ok = false; seen[h] = 1; });
+    return ok ? order.slice() : natural;
+  }
 
   /**
-   * 스킨스. opt.oecd(개인전에서만): 딴 스킨이 opt.join개 이상인 사람은 'OECD 가입자'가 되고, 가입한 채로 시작한 홀에서 벌칙 항목에 걸리면
-   * 걸린 항목마다 딴 스킨 1개를 내놓는다. 내놓은 스킨은 이월분에 얹혀 다음 홀 단독 승자가 가져간다.
-   * (돈으로는: 내놓는 사람이 다른 사람 각각에게 스킨당 단가를 돌려주고, 그 스킨을 다음 승자가 보통 스킨처럼 받는다)
-   * 내놓아서 기준 아래로 내려가면 다시 기준을 채울 때까지 벌칙이 없다
+   * 스킨스. 홀마다 단독 최저타가 스킨을 따고, 동타면 다음 홀로 이월한다.
+   *
+   * 돈 계산은 두 가지다.
+   *  (가) 서로 주고받기 (기본): 스킨 하나에 다른 사람 각각이 opt.unit을 준다.
+   *  (나) 공금(펀드) (opt.fund, 개인전에서만): 각자 opt.stake를 낸 것으로 치고 그 합이 공금이다.
+   *      시작할 때 공금에서 플레이어 각각에게 opt.start, 캐디에게 opt.tip을 준다.
+   *      홀 상금 opt.prize(이월분 포함)를 공금에서 승자에게 준다.
+   *      OECD 룰(opt.oecd): 공금에서 받은 돈(시작 지급 + 상금 − 벌금)이 낸 돈 이상인 사람(본전을 찾은 사람)은 'OECD 가입자'가 되고,
+   *      가입한 채로 시작한 홀에서 벌칙 항목에 걸리면 항목마다 opt.fine을 공금에 넣는다 (받은 돈 이상은 내지 않는다).
+   *      끝나면 공금에 남은 돈으로 캐디피(opt.caddie)를 내고, 모자라면 전원이 똑같이 나눠 내며 남으면 똑같이 돌려받는다.
+   *      마지막까지 이월된 스킨의 상금은 공금에 남는다.
+   *      사람별 최종 금액 = 시작 지급 + 상금 − 벌금 − 낸 돈 + (남은 돈 − 캐디피) ÷ 인원. 실제로 돈을 미리 걷을 필요는 없다:
+   *      송금은 가상 계정 '#pot'(공금)을 거치고, 캐디 몫(시작 지급 + 캐디피)은 '#caddie'가 받는 것으로 낸다
+   *      (settle이 손익 표에서는 빼고 송금 정리에는 넣는다).
+   * opt.order: 홀을 친 순서(홀 인덱스 배열). 10번홀에서 출발한 라운드는 18번홀의 이월·OECD 가입이 1번홀로 이어진다. 없으면 홀 번호 순
    */
   function skins(round, opt) {
     opt = opt || {};
     var useNet = !!opt.net;
     var unit = Number(opt.unit) || 0;
     var ents = entrantsFor(round, opt.mode);
-    var oecd = !!opt.oecd && opt.mode !== 'team', join = oecdJoin(opt.join);
-    var res = { entrants: [], holes: [], carry: 0, transfers: [], error: null, oecd: { on: oecd, join: join } };
+    var fundOn = !!opt.fund && opt.mode !== 'team';
+    var stake = wonAmount(opt.stake), prize = wonAmount(opt.prize), caddie = wonAmount(opt.caddie), fine = wonAmount(opt.fine);
+    var start = wonAmount(opt.start), tip = wonAmount(opt.tip);
+    var oecd = fundOn && !!opt.oecd;
+    var order = holeOrder(round, opt.order);
+    var res = { entrants: [], holes: [], carry: 0, transfers: [], error: null, fund: null };
     if (ents.length < 2) { res.error = opt.mode === 'team' ? '팀이 2개 이상 필요합니다' : '플레이어가 2명 이상 필요합니다'; return res; }
     var sm = strokesMap(round);
-    var won = {}, returned = {};
-    ents.forEach(function (e) { won[e.id] = 0; returned[e.id] = 0; });
+    var won = {}, got = {}, fined = {};
+    ents.forEach(function (e) { won[e.id] = 0; got[e.id] = 0; fined[e.id] = 0; });
     var carry = 0;
     var allPids = [];
     ents.forEach(function (e) { allPids = allPids.concat(e.pids); });
+    function held(e) { return start + got[e.id] - fined[e.id]; } // 공금에서 받아 지금 가지고 있는 돈
+    function isMember(e) { return oecd && stake > 0 && held(e) >= stake; }
 
-    for (var h = 0; h < round.holes; h++) {
+    for (var oi = 0; oi < order.length; oi++) {
+      var h = order[oi];
       var scores = ents.map(function (e) { return entrantScore(round, e, h, useNet, sm); });
       if (scores.some(function (s) { return s === null; })) {
-        res.holes.push({ hole: h, winner: null, skins: 0, carry: carry, played: false });
+        res.holes[h] = { hole: h, winner: null, skins: 0, carry: carry, played: false };
         continue;
       }
       var min = Math.min.apply(null, scores);
       var winners = [];
       scores.forEach(function (s, i) { if (s === min) winners.push(i); });
-      // 이 홀을 시작할 때의 OECD 가입자 (이 홀에서 따서 기준을 채운 사람은 다음 홀부터)
-      var members = oecd ? ents.filter(function (e) { return won[e.id] >= join; }) : [];
+      // 이 홀을 시작할 때의 OECD 가입자 (이 홀의 상금으로 본전을 찾은 사람은 다음 홀부터)
+      var members = ents.filter(isMember);
       carry += 1;
       var rec;
       if (winners.length === 1) {
         var w = ents[winners[0]];
         won[w.id] += carry;
-        var losers = allPids.filter(function (pid) { return w.pids.indexOf(pid) < 0; });
-        res.transfers = res.transfers.concat(makeTransfers(w.pids, losers, unit * carry, 'skins', (h + 1) + '번홀 ' + carry + '스킨'));
         rec = { hole: h, winner: w.id, winnerName: w.name, skins: carry, carry: 0, played: true };
+        if (fundOn) { got[w.id] += prize * carry; rec.amount = prize * carry; }
+        else {
+          var losers = allPids.filter(function (pid) { return w.pids.indexOf(pid) < 0; });
+          res.transfers = res.transfers.concat(makeTransfers(w.pids, losers, unit * carry, 'skins', (h + 1) + '번홀 ' + carry + '스킨'));
+        }
         carry = 0;
       } else {
         rec = { hole: h, winner: null, skins: 0, carry: carry, played: true, tie: true };
       }
-      // OECD 벌칙: 걸린 항목마다 딴 스킨 1개를 내놓아 이월분에 얹는다
+      // OECD 벌금: 걸린 항목마다 펀드에 넣는다
       members.forEach(function (e) {
-        var faults = oecdFaults(round, e.pids[0], h), k = Math.min(faults.length, won[e.id]);
-        if (!k) return;
-        won[e.id] -= k; returned[e.id] += k; carry += k;
-        var others = allPids.filter(function (pid) { return pid !== e.pids[0]; });
-        var names = faults.map(function (f) { return OECD_ITEMS.filter(function (it) { return it[0] === f; })[0][1]; });
-        res.transfers = res.transfers.concat(makeTransfers(others, e.pids, unit * k * others.length, 'skins', (h + 1) + '번홀 OECD ' + names.join('·') + ' ' + k + '스킨 반납'));
-        (rec.oecd = rec.oecd || []).push({ id: e.id, name: e.name, faults: faults, labels: names, returned: k });
+        var faults = oecdFaults(round, e.pids[0], h);
+        var f = Math.min(fine * faults.length, held(e));
+        if (!(f > 0)) return;
+        fined[e.id] += f;
+        var names = faults.map(function (k) { return OECD_ITEMS.filter(function (it) { return it[0] === k; })[0][1]; });
+        (rec.oecd = rec.oecd || []).push({ id: e.id, name: e.name, faults: faults, labels: names, fine: f });
       });
-      rec.carry = carry;
-      res.holes.push(rec);
+      res.holes[h] = rec;
     }
     res.carry = carry;
-    res.entrants = ents.map(function (e) {
-      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id], returned: returned[e.id], oecd: oecd && won[e.id] >= join };
-    }).sort(function (a, b) { return b.skins - a.skins; });
     res.unit = unit;
     res.net = useNet;
+    if (!fundOn) {
+      res.entrants = ents.map(function (e) {
+        return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id] };
+      }).sort(function (a, b) { return b.skins - a.skins; });
+      return res;
+    }
+    // 공금 정산
+    var n = ents.length, total = stake * n, paid = 0, fines = 0;
+    ents.forEach(function (e) { paid += got[e.id]; fines += fined[e.id]; });
+    var startOut = start * n + tip;                       // 시작할 때 나눠 준 돈
+    var left = total - startOut - paid + fines;           // 캐디피를 내기 전 공금에 남은 돈
+    var rest = left - caddie, share = rest / n;           // 캐디피를 낸 뒤: 남으면(+) 똑같이 돌려받고 모자라면(−) 똑같이 더 낸다
+    res.fund = { stake: stake, prize: prize, start: start, tip: tip, caddie: caddie, fine: fine, oecd: oecd, players: n,
+      total: total, startOut: startOut, paid: paid, fines: fines, left: left, rest: rest, share: share, caddieTotal: tip + caddie };
+    res.entrants = ents.map(function (e) {
+      var take = held(e);
+      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id], start: start, prize: got[e.id], fines: fined[e.id], take: take, final: take - stake + share, oecd: isMember(e) };
+    }).sort(function (a, b) { return b.skins - a.skins || b.final - a.final; });
+    res.entrants.forEach(function (e) {
+      if (e.final > 0) res.transfers.push({ from: '#pot', to: e.pids[0], amount: e.final, game: 'skins', note: '스킨스 공금 정산' });
+      else if (e.final < 0) res.transfers.push({ from: e.pids[0], to: '#pot', amount: -e.final, game: 'skins', note: '스킨스 공금 정산' });
+    });
+    if (tip + caddie > 0) res.transfers.push({ from: '#pot', to: '#caddie', amount: tip + caddie, game: 'skins', note: '캐디 (시작 지급 + 캐디피)' });
     return res;
   }
 
@@ -340,6 +385,7 @@
    *   파를 못 하면 없던 것으로 한다.
    * opt.birdie(기본 켬) 버디값: 버디 이하를 한 사람은 다른 사람 각각에게서 1타 금액을 더 받는다.
    * 니어와 버디값도 그 홀이 배판이면 2배다. 전원이 타수를 입력한 홀만 계산한다.
+   * opt.order: 홀을 친 순서(홀 인덱스 배열). '앞 홀'은 이 순서에서 바로 앞에 친 홀이다 (10번홀 출발이면 18번홀 다음이 1번홀). 없으면 홀 번호 순
    */
   function ojang(round, opt) {
     opt = opt || {};
@@ -355,12 +401,14 @@
       money[from] -= amount; money[to] += amount;
       res.transfers.push({ from: from, to: to, amount: amount, game: 'ojang', note: note });
     }
-    var prevAllTied = false;
-    for (var h = 0; h < round.holes; h++) {
+    var prevAllTied = false, order = holeOrder(round, opt.order);
+    for (var oi = 0; oi < order.length; oi++) {
+      var h = order[oi];
       if (!holeCompleteFor(round, pids, h)) {
-        // 아직 다 입력하지 않은 홀: 앞 홀이 전원 동타였다면 이 홀이 배판이 될 차례다
-        if (carryOn && prevAllTied && res.nextDouble === null) res.nextDouble = h;
-        res.holes.push({ hole: h, played: false, mult: 1, reasons: [] });
+        // 아직 다 입력하지 않은 홀: 앞 홀이 전원 동타였다면 이 홀이 배판이 될 차례다 (pendingDouble). nextDouble은 그런 홀 가운데 가장 먼저 칠 홀
+        var pend = carryOn && prevAllTied;
+        if (pend && res.nextDouble === null) res.nextDouble = h;
+        res.holes[h] = { hole: h, played: false, mult: 1, reasons: [], pendingDouble: pend };
         prevAllTied = false;
         continue;
       }
@@ -401,7 +449,7 @@
           pids.forEach(function (other) { if (other !== pid) pay(other, pid, unit * mult, tag + ' 버디값'); });
         });
       }
-      res.holes.push(rec);
+      res.holes[h] = rec;
       prevAllTied = most === pids.length;
     }
     res.rows = round.players.map(function (p) { return { id: p.id, name: p.name, amount: money[p.id] }; })
@@ -634,10 +682,18 @@
   }
 
   // ───────────────────────── 정산 ─────────────────────────
+  /**
+   * 송금 목록 → 사람별 손익과 최소 송금 정리.
+   * '#'으로 시작하는 id는 가상 계정이다('#pot' 스킨스 펀드, '#caddie' 캐디피). 손익 표(rows)에는 넣지 않고,
+   * 송금 정리(payments)에는 그대로 나온다 → 캐디피처럼 사람들 밖으로 나가는 돈도 누가 얼마를 낼지 정리된다
+   */
   function settle(transfers, players) {
     var net = {}, paid = {}, received = {}, byGame = {};
     players.forEach(function (p) { net[p.id] = 0; paid[p.id] = 0; received[p.id] = 0; byGame[p.id] = {}; });
     transfers.forEach(function (t) {
+      [t.from, t.to].forEach(function (id) {
+        if (typeof id === 'string' && id.charAt(0) === '#' && !(id in net)) { net[id] = 0; paid[id] = 0; received[id] = 0; byGame[id] = {}; }
+      });
       if (!(t.from in net) || !(t.to in net)) return;
       net[t.from] -= t.amount; net[t.to] += t.amount;
       paid[t.from] += t.amount; received[t.to] += t.amount;
@@ -678,8 +734,10 @@
    * 모든 게임을 항상 계산한다 (개인 스코어 하나로 모든 버전의 결과가 나오도록).
    * 각 게임의 enabled(정산 포함) 여부는 결과에 표시되며, 정산(transfers)에는 포함된 게임만 반영된다.
    */
-  function computeAll(round) {
+  function computeAll(round, ctx) {
     var g = round.games || {};
+    var order = ctx && ctx.order; // 홀을 친 순서 (앱이 analysis.js의 playOrder로 넘겨 준다)
+    function withOrder(o) { var c = {}; Object.keys(o || {}).forEach(function (k) { c[k] = o[k]; }); c.order = order; return c; }
     var out = { transfers: [] };
     function add(key, res, included) {
       res.enabled = !!included;
@@ -688,8 +746,8 @@
     }
     add('stroke', strokePlay(round, g.stroke || {}), true);
     out.stableford = stableford(round, g.stableford || {});
-    add('skins', skins(round, g.skins || {}), g.skins && g.skins.enabled);
-    add('ojang', ojang(round, g.ojang || {}), g.ojang && g.ojang.enabled);
+    add('skins', skins(round, withOrder(g.skins)), g.skins && g.skins.enabled);
+    add('ojang', ojang(round, withOrder(g.ojang)), g.ojang && g.ojang.enabled);
     add('match', matchPlay(round, g.match || {}), g.match && g.match.enabled);
     if (round.holes === 18) add('nassau', nassau(round, g.nassau || {}), g.nassau && g.nassau.enabled);
     add('bestball', bestBall(round, g.bestball || {}), g.bestball && g.bestball.enabled);
@@ -718,7 +776,6 @@
     stablefordPoints: stablefordPoints,
     computeMatch: computeMatch,
     OECD_ITEMS: OECD_ITEMS,
-    OECD_JOIN: OECD_JOIN,
     oecdFaults: oecdFaults,
     strokePlay: strokePlay,
     stableford: stableford,

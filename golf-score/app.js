@@ -8,7 +8,16 @@
   var COURSE_MAPS = (window.GolfCourseMaps && typeof window.GolfCourseMaps === 'object') ? window.GolfCourseMaps : {};
   A.setMemoUpgrades(BUILTIN_COURSES.memoUpgrades); // 예전 문장형 메모가 남은 라운드·저장 코스도 키워드로 보이게
   var KW_MAX = 24; // 공략 키워드 한 개의 최대 길이
-  var KW_SOURCE = '키워드는 공개 후기를 간추린 참고 정보예요.'; // 기본 제공 코스의 키워드 출처
+  /**
+   * 기본 제공 코스의 키워드(와 OB 위치)는 공개 후기를 간추린 것이라는 표시. 그 홀의 키워드가 기본 제공 값 그대로일 때만 붙인다
+   * (직접 넣거나 고친 키워드에 '후기에서 왔다'고 하지 않는다). 예전 문장형 메모가 남아 있는 칸도 기본 제공 값으로 본다
+   */
+  function kwSource(r, h) {
+    var bi = builtinCourse(r.course, r.holes), raw = r.holeInfo && r.holeInfo[h] && r.holeInfo[h].memo;
+    var mine = bi && bi.holeInfo && bi.holeInfo[h], up = BUILTIN_COURSES.memoUpgrades || {};
+    if (!bi || !raw || !(mine && mine.memo === raw) && !Object.prototype.hasOwnProperty.call(up, raw)) return '';
+    return (mine && (mine.haz & 3) ? '키워드와 OB 위치는' : '키워드는') + ' 공개 후기를 간추린 참고 정보예요.';
+  }
   var KEY = 'golfscore.v1';
   var TEAMS = ['A', 'B', 'C', 'D'];
   var GAME_NAMES = { stroke: '스트로크', stableford: '스테이블포드', skins: '스킨스', match: '매치', nassau: '나소', bestball: '베스트볼', vegas: '라스베가스', bonus: '보너스' };
@@ -662,7 +671,7 @@
     var line1 = labels.join(' · '), line2 = words.length ? '📝 ' + words.join(A.MEMO_SEP) : '';
     if (!line2 && labels.length) { var tips = A.holeTips(r, h, myPid()); if (tips.length) line2 = '🧭 ' + tips[0]; }
     var none = !line1 && !line2;
-    if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = '거리·위험 요소·키워드를 넣으면 약도와 공략 팁이 나와요'; }
+    if (none) { line1 = r.course ? r.course : '코스 정보 입력'; line2 = '거리·위험 요소를 넣으면 약도와 공략 팁이 나와요'; }
     else if (!line1) line1 = r.course || (h + 1) + '번홀 키워드';
     return '<span class="ic">🗺️</span><span class="txt"><span class="l1' + (none ? ' none' : '') + '">' + esc(line1) + '</span> <span class="l2">' + esc(line2) + '</span></span><span class="go">›</span>';
   }
@@ -677,16 +686,24 @@
     s.classList.remove('flow');
     if (l1.scrollWidth > l1.clientWidth + 1) s.classList.add('flow');
   }
+  /**
+   * 코스 안내도 약도가 있는 홀은 코스 정보 카드가 보기 전용이다. 약도·키워드·공략 설명에 필요한 내용이 이미 다 나와 있어서,
+   * 같은 내용을 한 번 더 늘어놓는 입력란(거리·형태·위험 요소·키워드)을 두지 않는다. 약도가 없는 코스는 카드를 펼쳐 직접 넣는다.
+   * (동반자가 넣은 값이나 예전에 넣어 둔 값은 그대로 보여 준다. 파·핸디캡은 홀 머리말에서 언제나 고칠 수 있다)
+   */
+  function courseFixed(r, h) { return !!courseLayout(r, h); }
+  /** 이 홀의 입력란이 펼쳐져 있는지 (보기 전용 홀에서는 늘 접힌 모습) */
+  function courseOpen(r, h) { return !!state.courseOpen && !courseFixed(r, h); }
   /** 코스 정보 중 입력란이 없는 부분(키워드·공략·약도). 입력하는 동안이나 동반자가 고쳤을 때 이 영역만 다시 그린다 */
   function courseLive(r, h, par) {
-    var info = A.holeInfo(r, h), open = !!state.courseOpen, lay = courseLayout(r, h);
+    var info = A.holeInfo(r, h), open = courseOpen(r, h), lay = courseLayout(r, h);
     var tips = A.holeTips(r, h, myPid());
     var notes = '', words = open ? [] : A.memoWords(info.memo);
     // 공략 키워드: 문장 대신 짧은 꼬리표 여러 개 (좁은 칸에서도 잘리지 않고 줄만 바뀐다).
     // 펼친 상태에서는 바로 아래 편집 칸에 같은 키워드가 있으므로 여기에 또 그리지 않는다 (높이가 고정된 칸을 약도 설명과 공략 팁에 쓴다)
     if (words.length) notes += '<div class="coachline"><span class="ic">📝</span><span class="kws">' + words.map(function (w) { return '<span class="kw">' + esc(w) + '</span>'; }).join('') + '</span></div>';
     // 기본 제공 코스의 키워드는 공개 후기를 간추린 것이라는 점을 밝힌다 (직접 넣은 키워드가 섞여 있어도 코스 단위로만 구분한다)
-    var src = words.length && builtinCourse(r.course, r.holes) ? KW_SOURCE : '';
+    var src = words.length ? kwSource(r, h) : '';
     if (lay) notes += layoutNotes(lay);
     notes += tips.map(function (t) { return '<div class="coachline"><span class="ic">🧭</span><span>' + esc(t) + '</span></div>'; }).join('');
     // 펼친 동안에는 약도 영역을 항상 같은 높이로 그린다(공략 글은 약도 높이 안에서 스크롤) → 위험 요소를 누르거나 거리를 적어도
@@ -704,13 +721,9 @@
    * 점수 칸 위에 있으면 높이가 변할 때마다 ＋/− 버튼이 손가락 밑에서 밀려 다른 사람 점수를 누르게 된다.
    * 펼쳤을 때는 미리보기(약도·공략)를 높이가 고정된 영역으로 입력란 바로 위에 둔다: 입력 결과가 바로 보이면서 입력란은 움직이지 않는다.
    */
-  /**
-   * 홀 형태 칸. 안내도 약도가 있는 홀은 형태가 약도에 이미 정해져 있으므로 고르는 버튼 대신 그 값만 보여 준다 (guideShape. 파3처럼 형태가 없으면 칸을 비움).
-   * 약도가 없는 코스에서는 여기서 고른 형태로 도식을 그리고 공략 팁을 만든다
-   */
+  /** 홀 형태 칸 (약도가 없는 코스): 여기서 고른 형태로 도식을 그리고 공략 팁을 만든다. 약도가 있는 홀의 형태는 약도 기준이다(guideShape) */
   function shapeField(r, h) {
     var shape = A.holeInfo(r, h).shape;
-    if (courseLayout(r, h)) return shape ? '<label>홀 형태</label><div class="fixedval">' + A.SHAPE_LABELS[shape] + ' <span class="muted small">약도 기준</span></div>' : '';
     return '<label>홀 형태</label><div class="seg sm">' + [['L', '좌 도그렉'], ['S', '직선'], ['R', '우 도그렉']].map(function (o) {
       return '<button type="button" data-action="hi-shape" data-v="' + o[0] + '" class="' + (shape === o[0] ? 'active' : '') + '">' + o[1] + '</button>';
     }).join('') + '</div>';
@@ -741,11 +754,11 @@
   function kwDraft(r, h) { var d = state.kwDraft; return d && d.rid === r.id && d.h === h ? d.v : ''; }
   /**
    * 입력란 글(text)을 이 홀의 키워드로 더한다. 반환: 더한 개수, 0(전부 이미 있음·빈 글), 'long'(24자를 넘는 키워드가 있음), 'full'(메모 한 칸이 넘침).
-   * 잘라서 넣지 않는다: 토막이 저장되면 동반자에게도 그대로 간다
+   * 잘라서 넣지 않는다: 토막이 저장되면 동반자에게도 그대로 간다. anyLength: 긴 키워드도 그대로 받는다 (쓰던 글을 두고 떠났을 때)
    */
-  function addKeywords(r, h, text) {
+  function addKeywords(r, h, text, anyLength) {
     var add = A.memoWords(text);
-    if (add.some(function (w) { return w.length > KW_MAX; })) return 'long';
+    if (!anyLength && add.some(function (w) { return w.length > KW_MAX; })) return 'long';
     var words = A.memoWords(A.holeInfo(r, h).memo), n = 0;
     add.forEach(function (w) { if (words.indexOf(w) < 0) { words.push(w); n++; } });
     if (!n) return 0;
@@ -756,7 +769,8 @@
   }
   /**
    * 추가를 누르지 않고 다른 홀이나 다른 화면으로 넘어갔으면, 쓰던 글을 그 홀의 키워드로 넣어 준다 (예전 메모 칸은 치는 대로 저장됐다).
-   * 같은 홀에 머무는 동안에는 쓰던 글로 남겨 둔다. 넣을 수 없는 글(너무 길거나 칸이 가득 참)은 버리지 않고 입력란에 남겨 돌아왔을 때 보이게 한다.
+   * 같은 홀에 머무는 동안에는 쓰던 글로 남겨 둔다. 떠난 뒤에는 고쳐 달라고 할 수 없으므로 24자를 넘는 글도 그대로 넣는다(예전에 문장으로 적던 메모처럼 보인다).
+   * 칸이 가득 차 넣을 수 없으면 알려 주고, 글은 입력란에 남겨 돌아왔을 때 보이게 한다.
    * force: 라운드를 종료하거나 기록으로 넘기기 직전 (아직 그 홀에 있어도 넣는다)
    */
   function flushKwDraft(force) {
@@ -764,9 +778,9 @@
     if (!d) return;
     if (!r || r.id !== d.rid) { state.kwDraft = null; return; } // 그 라운드는 이미 끝났다
     if (!force && state.view === 'play' && r.currentHole === d.h && !state.readOnly) return;
-    if (state.readOnly || !A.memoWords(d.v).length) { state.kwDraft = null; return; }
-    var n = addKeywords(r, d.h, d.v);
-    if (n === 'long' || n === 'full') return;
+    if (state.readOnly || courseFixed(r, d.h) || !A.memoWords(d.v).length) { state.kwDraft = null; return; }
+    var n = addKeywords(r, d.h, d.v, true);
+    if (n === 'full') { if (!d.told) { d.told = true; toast((d.h + 1) + '번홀은 키워드 칸이 가득 차서 쓰던 글을 넣지 못했어요'); } return; }
     state.kwDraft = null;
     if (n) { save(); toast((d.h + 1) + '번홀에 쓰던 키워드를 추가했어요'); }
   }
@@ -779,18 +793,18 @@
     }).join('');
   }
   function courseBlock(r, h, par) {
-    var info = A.holeInfo(r, h), open = !!state.courseOpen;
-    var html = '<div class="card course" id="course-card">' +
-      '<button class="detail-head course-head" data-action="course-toggle" aria-expanded="' + (open ? 'true' : 'false') + '">' +
-      '<span class="caret">' + (open ? '▾' : '▸') + '</span><span class="ttl">🗺️ ' + (h + 1) + '번홀 코스 정보</span>' +
-      '<span class="sumtxt' + (r.course ? '' : ' none') + '">' + esc(r.course || '거리 · 형태 · 위험 요소 · 키워드') + '</span></button>';
+    var info = A.holeInfo(r, h), open = courseOpen(r, h);
+    var title = '<span class="ttl">🗺️ ' + (h + 1) + '번홀 코스 정보</span><span class="sumtxt' + (r.course ? '' : ' none') + '">' + esc(r.course || '거리 · 형태 · 위험 요소 · 키워드') + '</span>';
+    var html = '<div class="card course" id="course-card">' + (courseFixed(r, h)
+      ? '<div class="detail-head course-head">' + title + '</div>' // 보기 전용: 펼칠 입력란이 없으므로 누르는 머리말이 아니다
+      : '<button class="detail-head course-head" data-action="course-toggle" aria-expanded="' + (open ? 'true' : 'false') + '"><span class="caret">' + (open ? '▾' : '▸') + '</span>' + title + '</button>');
     html += '<div id="course-live" data-region="course-live">' + courseLive(r, h, par) + '</div>';
     if (open) {
       html += '<div class="course-edit">' +
         '<div class="row top"><div class="field" data-region="ce-dist"><label>' + (h + 1) + '번홀 거리 (m)</label><input type="number" inputmode="numeric" min="0" max="999" data-hi="dist" value="' + (info.dist || '') + '" placeholder="예: 350" class="short"></div>' +
         '<div class="field grow" data-region="course-shape">' + shapeField(r, h) + '</div></div>' +
         '<div class="field"><label>위험 요소</label><div class="hazgrid" data-region="course-haz">' + hazGrid(info.haz) + '</div></div>' +
-        '<div class="field"><label>공략 키워드' + (builtinCourse(r.course, r.holes) ? ' <span class="muted">(공개 후기 참고)</span>' : '') + '</label>' +
+        '<div class="field"><label>공략 키워드' + (kwSource(r, h) ? ' <span class="muted">(공개 후기 참고)</span>' : '') + '</label>' +
         '<div class="chips" data-region="ce-kw">' + kwChips(r, h) + '</div>' +
         '<div class="kwadd" data-region="ce-kwadd"><input type="text" id="kw-in" data-kwin="1" value="' + esc(kwDraft(r, h)) + '" maxlength="' + S.MEMO_MAX + '" placeholder="예: 내리막, 우측 OB" enterkeyhint="done" autocomplete="off" aria-label="추가할 공략 키워드">' +
         '<button type="button" class="btn sm" data-action="kw-add">추가</button></div></div></div>';
@@ -804,6 +818,7 @@
   function courseInput(el) {
     var r = state.round; if (!r || state.readOnly || el.dataset.hi !== 'dist') return;
     var h = r.currentHole;
+    if (courseFixed(r, h)) return; // 보기 전용 홀 (입력란이 남아 있었다면 다음에 다시 그릴 때 사라진다)
     setHoleInfo(r, h, 'dist', el.value === '' ? null : Number(el.value));
     save();
     var set = function (id, html) { var n = document.getElementById(id); if (n) n.innerHTML = html; };
@@ -835,8 +850,9 @@
   }
   /**
    * 라운드를 기록으로 보낼 때의 자동 저장 (코스를 저장하는 유일한 길). 저장해 둔 코스를 통째로 덮어쓰지 않는다.
-   *  - 같은 이름으로 저장한 코스가 없으면 새로 저장한다. 단, 기본 제공 코스와 내용이 같으면 사본을 만들지 않는다
-   *    (사본이 생기면 기본 제공 코스를 가려서, 나중에 기본 코스가 바로잡혀도 반영되지 않는다).
+   *  - 같은 이름으로 저장한 코스가 없으면 새로 저장한다. 단, 기본 제공 코스는 이 라운드에서 고친 칸이 있을 때만 사본을 만들고,
+   *    그 사본은 '지금의' 기본 제공 값에 고친 칸만 얹어서 만든다. 라운드가 예전 기본 제공 값으로 만들어졌더라도
+   *    (앱이 갱신되기 전에 시작한 라운드) 옛 값의 사본이 바로잡힌 기본 제공 코스를 가리지 않게 한다.
    *  - 저장한 코스가 있으면 이번 라운드에서 실제로 고친 칸만 반영한다 (그 칸의 수정 시각이 라운드 생성 시각보다 뒤인 것).
    *    코스를 불러오지 않고 이름만 적은 라운드나 다른 사람이 만든 라운드에 참여한 경우에도 내가 저장해 둔 파·거리·메모가 지워지지 않는다.
    */
@@ -854,9 +870,13 @@
     var old = savedCourse(name, r.holes);
     if (!old || !Array.isArray(old.pars) || old.pars.length !== r.holes || !Array.isArray(old.strokeIndex) || old.strokeIndex.length !== r.holes) {
       var bi = old ? null : builtinCourse(name, r.holes);
-      if (bi && courseSig(bi) === courseSig(r)) { applied(); return; }
-      if (done && !old && !nFresh) return; // 이미 반영했던 라운드에 새로 고친 칸이 없음: 그 사이 지운 코스를 되살리지 않는다
-      saveCourse(r); applied(); return;
+      if (!bi) {
+        if (done && !old && !nFresh) return; // 이미 반영했던 라운드에 새로 고친 칸이 없음: 그 사이 지운 코스를 되살리지 않는다
+        saveCourse(r); applied(); return;
+      }
+      if (!nFresh) { applied(); return; } // 기본 제공 코스를 고치지 않았다: 사본을 만들지 않는다
+      old = { name: name, holes: r.holes, pars: bi.pars.slice(), strokeIndex: bi.strokeIndex.slice(), holeInfo: clone(bi.holeInfo || {}), updatedAt: Date.now() };
+      state.courses = [old].concat(state.courses || []);
     }
     old.holeInfo = old.holeInfo || {};
     for (var h = 0; h < r.holes; h++) {
@@ -872,6 +892,7 @@
       if (Object.keys(info).length) old.holeInfo[h] = info; else delete old.holeInfo[h];
     }
     applied();
+    if (bi && !n) { state.courses = state.courses.filter(function (c) { return c !== old; }); return; } // 고친 값이 결국 기본 제공 값과 같다: 사본이 필요 없다
     if (n) old.updatedAt = Date.now();
     state.courses = [old].concat(state.courses.filter(function (c) { return c !== old; })); // 최근에 친 코스가 앞에 오도록
   }
@@ -1128,7 +1149,7 @@
           return '<button class="chip tap ' + ((d.course || '').trim() === c.name ? 'active' : '') + '" data-action="pick-course" data-name="' + esc(c.name) + '">' + esc(c.name) + '</button>';
         }).join('') + '</div>';
       })() + '</div>' +
-      '<div class="muted small">' + (findCourse(d.course, d.holes) ? (isBuiltinCourse(d.course, d.holes) ? '공개 자료를 정리한 기본 제공 코스예요. 파·핸디캡·거리(화이트티)가 채워지고, 현장 스코어카드와 다르면 입력 화면에서 바로 고칠 수 있어요.' : '내가 저장한 코스의 파·핸디캡·홀 정보로 시작해요. <button class="btn sm ghost" data-action="del-course">' + (builtinCourse(d.course, d.holes) ? '기본 제공 값으로 되돌리기' : '저장한 코스 삭제') + '</button>') : '파/핸디캡 인덱스는 기본값(파72)으로 시작하고, 스코어 입력 화면에서 홀마다 파·거리·위험 요소·메모를 넣을 수 있어요.') + '</div></div></div>';
+      '<div class="muted small">' + (findCourse(d.course, d.holes) ? (isBuiltinCourse(d.course, d.holes) ? '공개 자료를 정리한 기본 제공 코스예요. 파·핸디캡·거리(화이트티)가 채워지고, 현장 스코어카드와 다르면 입력 화면에서 바로 고칠 수 있어요.' : '내가 저장한 코스의 파·핸디캡·홀 정보로 시작해요. <button class="btn sm ghost" data-action="del-course">' + (builtinCourse(d.course, d.holes) ? '기본 제공 값으로 되돌리기' : '저장한 코스 삭제') + '</button>') : '파/핸디캡 인덱스는 기본값(파72)으로 시작하고, 스코어 입력 화면에서 홀마다 파·거리·위험 요소·키워드를 넣을 수 있어요.') + '</div></div></div>';
     html += playersSection('draft', d.players, true);
     html += '<h2 style="margin:4px 2px -4px;font-size:16px">게임 & 정산</h2>';
     html += gamesSection('draft', d.games, d.holes);
@@ -1998,6 +2019,7 @@
     },
     // 코스 정보
     'course-toggle': function () { state.courseOpen = !state.courseOpen; save(); render(); },
+    // 아래 hi-*/kw-* 동작은 입력란이 있는 홀에서만 일어난다. 보기 전용 홀인데 눌렸다면(코스 이름이 방금 바뀌어 입력란이 아직 남아 있던 경우) 다시 그려 입력란을 치운다
     'map-zoom': function () { var r = state.round; if (!r) return; state.mapZoom = r.currentHole; save(); render(); }, // 그 홀에서만 열려 있다(홀을 옮기면 닫힘)
     'map-close': function () { state.mapZoom = null; save(); render(); },
     'map-stay': function () { }, // 창 안쪽을 눌렀을 때는 닫지 않는다
@@ -2010,12 +2032,13 @@
     'hi-shape': function (d) {
       var r = state.round; if (!r || state.readOnly) return;
       var h = r.currentHole, cur = A.holeInfo(r, h).shape;
-      if (courseLayout(r, h)) return; // 약도가 있는 홀의 형태는 약도 기준으로 고정
+      if (courseFixed(r, h)) { render(); return; }
       setHoleInfo(r, h, 'shape', cur === d.v ? null : d.v); save(); render();
     },
     'hi-haz': function (d) {
       var r = state.round, bit = Number(d.bit); if (!r || state.readOnly) return;
       var h = r.currentHole;
+      if (courseFixed(r, h)) { render(); return; }
       // 누른 위험 요소 하나만 바꾼다(비트별 공유 키) → 동반자가 같은 홀의 다른 위험 요소를 동시에 표시해도 서로 지우지 않음
       if (!setHoleInfo(r, h, 'z' + bit, (A.holeInfo(r, h).haz & bit) ? null : 1)) return;
       save(); render();
@@ -2023,6 +2046,7 @@
     'kw-add': function (d, el, ev) { // 공략 키워드 추가 (쉼표로 나눠 여러 개를 한 번에 넣을 수 있다)
       var r = state.round; if (!r || state.readOnly) return;
       var h = r.currentHole, inp = document.getElementById('kw-in');
+      if (courseFixed(r, h)) { state.kwDraft = null; render(); return; }
       var text = inp ? inp.value : kwDraft(r, h);
       if (!A.memoWords(text).length) { if (inp) inp.focus(); return; }
       // 너무 긴 키워드나 한도를 넘는 추가는 넣지 않고 알려 준다. 쓰던 글은 입력란에 그대로 둔다
@@ -2037,6 +2061,7 @@
     'kw-del': function (d) {
       var r = state.round; if (!r || state.readOnly) return;
       var h = r.currentHole, words = A.memoWords(A.holeInfo(r, h).memo), i = words.indexOf(d.kw);
+      if (courseFixed(r, h)) { render(); return; }
       if (i < 0) return;
       words.splice(i, 1);
       var memo = joinKw(words);

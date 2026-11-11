@@ -234,38 +234,45 @@ test('hazard labels are grouped by kind (OB · 해저드 · 벙커)', () => {
   assert.deepEqual(A.holeLabels(r, 0), ['362m', '좌 도그렉', 'OB 우', '벙커 좌우·그린 주변']);
 });
 
-test('built-in keyword memos: short keywords, and old sentence memos read as the new keywords', () => {
+test('built-in keyword memos: short keywords; old sentence memos read as keywords of their own hole', () => {
   const S = require('../sync.js');
   const courses = require('../courses.js');
-  const current = new Set();
+  const v9 = require('./memo-v9.json'); // 예전 버전의 문장형 메모 (코스 이름 → 홀별 문장, 없으면 null)
+  const up = courses.memoUpgrades;
+  let n = 0;
   courses.forEach((c) => {
-    Object.keys(c.holeInfo).forEach((h) => {
-      const memo = c.holeInfo[h].memo; if (!memo) return;
-      const tag = c.name + ' #' + (+h + 1);
+    assert.ok(Array.isArray(v9[c.name]) && v9[c.name].length === c.holes, 'fixture covers ' + c.name);
+    for (let h = 0; h < c.holes; h++) {
+      const info = c.holeInfo[h] || {}, memo = info.memo, old = v9[c.name][h];
+      const tag = c.name + ' #' + (h + 1);
+      assert.equal(!!memo, !!old, tag + ' has keywords exactly where the old data had a sentence');
+      if (!memo) continue;
+      n++;
       const words = A.memoWords(memo);
       assert.equal(words.join(A.MEMO_SEP), memo, tag + ' is stored exactly as its keywords joined');
       assert.ok(words.length >= 1 && words.length <= 5, tag + ' keyword count');
       words.forEach((w) => assert.ok(w.length <= 24, tag + ' keyword too long: ' + w));
-      assert.ok(memo.length <= S.MEMO_MAX);
       assert.ok(!/후기 참고/.test(memo), tag + ' no sentence prefix');
-      current.add(memo);
-    });
+      // 위험 요소로 표시한 OB를 키워드에서 또 말하지 않는다 (요약 줄에 두 번 나오지 않게)
+      if (info.haz & 3) assert.ok(!/OB/.test(memo), tag + ' OB is a hazard flag, not also a keyword');
+      // 번역표: 이 홀의 옛 문장은 이 홀의 키워드로 읽힌다. 더 들어 있는 말은 그때 자료에 표시가 없던 위험 요소·형태뿐이다
+      assert.match(old, /^후기 참고: /);
+      assert.ok(Object.prototype.hasOwnProperty.call(up, old), tag + ' old sentence is in the upgrade table');
+      const legacy = A.memoWords(up[old]);
+      assert.equal(legacy.join(A.MEMO_SEP), up[old], tag + ' upgrade target is in keyword form');
+      words.forEach((w) => assert.ok(legacy.includes(w), tag + ' upgrade target keeps this hole\'s keyword: ' + w));
+      legacy.filter((w) => !words.includes(w)).forEach((w) => assert.match(w, /OB|해저드|그린 벙커|우측으로 휨/, tag + ' extra word in the upgrade target: ' + w));
+      legacy.forEach((w) => assert.ok(w.length <= 24, tag + ' legacy keyword too long: ' + w));
+      const clean = { id: 'r', holes: 9, date: 'd', createdAt: 1, name: 'n', pars: [4, 4, 4, 4, 4, 4, 4, 4, 4], strokeIndex: [1, 2, 3, 4, 5, 6, 7, 8, 9], players: [{ id: 'a', name: 'A', hcp: 0, team: '' }],
+        scores: { a: new Array(9).fill(null) }, extras: {}, games: {}, status: 'live', rev: {}, course: '', holeInfo: { 0: { memo: old } } };
+      S.diffAndStamp(clean, {}, S.createClock(() => 5), 'A');
+      assert.equal(clean.holeInfo[0].memo, old, tag + ' the old sentence is what sync validation stored, so an exact match is possible');
+    }
   });
-  const up = courses.memoUpgrades;
-  const olds = Object.keys(up);
-  assert.equal(olds.length, current.size, 'one old sentence per current keyword memo');
-  olds.forEach((old) => {
-    assert.match(old, /^후기 참고: /);
-    assert.ok(current.has(up[old]), 'upgrade target is a current built-in memo: ' + up[old]);
-    assert.ok(!current.has(old));
-    const clean = { id: 'r', holes: 9, date: 'd', createdAt: 1, name: 'n', pars: [4, 4, 4, 4, 4, 4, 4, 4, 4], strokeIndex: [1, 2, 3, 4, 5, 6, 7, 8, 9], players: [{ id: 'a', name: 'A', hcp: 0, team: '' }],
-      scores: { a: new Array(9).fill(null) }, extras: {}, games: {}, status: 'live', rev: {}, course: '', holeInfo: { 0: { memo: old } } };
-    S.diffAndStamp(clean, {}, S.createClock(() => 5), 'A');
-    assert.equal(clean.holeInfo[0].memo, old, 'the old sentence is what sync validation stored, so an exact match is possible');
-  });
+  assert.equal(Object.keys(up).length, n, 'no stray entries in the upgrade table');
   // 읽을 때만 바꾼다: 저장된 값은 그대로, 번역표에 없는 메모(직접 고친 문장)는 건드리지 않는다
   const r = mk(9, { a: [5] });
-  const old = olds[0];
+  const old = Object.keys(up)[0];
   r.holeInfo = { 0: { memo: old }, 1: { memo: old + ' 추가' }, 2: { memo: 'toString' } };
   try {
     A.setMemoUpgrades(up);
@@ -276,6 +283,21 @@ test('built-in keyword memos: short keywords, and old sentence memos read as the
     A.setMemoUpgrades(null);
     assert.equal(A.holeInfo(r, 0).memo, old);
   } finally { A.setMemoUpgrades(null); }
+});
+
+test('built-in Creek course: tips never aim at a side its own data calls OB or hazard', () => {
+  const courses = require('../courses.js');
+  const c = courses.find((x) => x.name === '베어크리크 포천 · 크리크 (화이트티)');
+  const r = { holes: c.holes, pars: c.pars, holeInfo: c.holeInfo, players: [], scores: {} };
+  let ob = 0;
+  for (let h = 0; h < c.holes; h++) {
+    const haz = c.holeInfo[h].haz || 0, tips = A.holeTips(r, h).join(' ');
+    const left = !!(haz & (A.HAZ.OB_L | A.HAZ.WATER_L)), right = !!(haz & (A.HAZ.OB_R | A.HAZ.WATER_R));
+    if (haz & 3) ob++;
+    if (left) assert.doesNotMatch(tips, /왼쪽(으로| 절반을|을) 겨냥|가운데보다 왼쪽/, 'hole ' + (h + 1) + ' has danger on the left: ' + tips);
+    if (right) assert.doesNotMatch(tips, /오른쪽(으로| 절반을|을) 겨냥|가운데보다 오른쪽/, 'hole ' + (h + 1) + ' has danger on the right: ' + tips);
+  }
+  assert.ok(ob >= 12, 'OB sides from the reviews are hazard flags');
 });
 
 // ───────────────────────── 코드 리뷰에서 확인된 문제의 회귀 테스트 ─────────────────────────

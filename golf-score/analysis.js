@@ -398,7 +398,7 @@
       var centre = bend + '으로 휘는 홀이에요. 코너를 가로지르려 하지 말고 페어웨이 가운데로 보내세요.';
       outDanger = !!bend && (i.shape === 'L' ? dangerR : dangerL);
       if (dangerL && dangerR) {
-        tips.push('양쪽이 모두 위험한 좁은 홀이에요. 거리 욕심을 버리고 우드나 유틸리티로 페어웨이를 먼저 지키세요.');
+        tips.push('양쪽이 모두 위험한 홀이에요. 거리 욕심을 버리고 페어웨이를 먼저 지키세요.');
         if (bend) tips.push(centre);
       } else if (outDanger) {
         tips.push(bend + '으로 휘는 홀인데 바깥쪽(' + outer + ')이 ' + (i.shape === 'L' ? what(obR, wR) : what(obL, wL)) + '예요. 코너를 가로지르려 하지 말고 페어웨이 가운데를 겨냥하세요.');

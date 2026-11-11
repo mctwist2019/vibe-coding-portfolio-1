@@ -309,7 +309,7 @@ details.adv[open] summary::before { content: '▾ '; }
 .course-sum .l1 { display: block; height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; font-weight: 700; }
 .course-sum .l1.none { font-weight: 600; color: var(--muted); }
 /* 첫 줄이 한 줄에 다 들어가지 않는 홀(app.js의 fitSummary가 .flow를 붙인다): 자르지 않고 키워드와 한 문단으로 세 줄까지 이어 보여 준다. 글 영역의 높이(51px)는 같다 */
-.course-sum.flow .txt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; height: 51px; line-height: 17px; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; }
+.course-sum.flow .txt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; height: 51px; font-size: 12px; line-height: 17px; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; } /* 글자 크기를 여기서 줄여야 줄 높이가 17px로 지켜진다 (물려받은 16px이면 줄마다 19px가 되어 셋째 줄 아래가 잘린다) */
 .course-sum.flow .l1, .course-sum.flow .l2 { display: inline; height: auto; line-height: inherit; white-space: normal; overflow: visible; -webkit-line-clamp: none; line-clamp: none; }
 .course-sum.flow .l1 { font-size: 13px; } /* 이어 보일 때는 조금 작게: 360px 화면에서도 크리크 18홀이 모두 세 줄에 들어간다 */
 /* 둘째 칸(공략 키워드나 첫 공략 팁)은 두 줄까지 보여 준다. 내용이 한 줄이거나 없어도 두 줄 높이를 차지한다 → 요약 줄 높이는 늘 같다 */
@@ -345,7 +345,6 @@ html.noscroll { overflow: hidden; } /* 약도 창이 열려 있는 동안 뒤 �
 .holemap .cap { font-size: 9px; font-weight: 700; fill: #16211b; text-anchor: middle; }
 .course-edit { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 2px; }
 .course-edit input.short { width: 96px; }
-.fixedval { min-height: 40px; display: flex; align-items: center; gap: 8px; font-weight: 700; }
 /* 위험 요소: 종류별 한 줄, 좌 · 우 · 그린 쪽 칸을 세로로 맞춘다 */
 .hazgrid { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.7fr); gap: 6px; align-items: center; }
 .hazgrid .hg-name { font-size: 14px; font-weight: 700; padding-right: 6px; white-space: nowrap; }

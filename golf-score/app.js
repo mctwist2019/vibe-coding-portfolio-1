@@ -1152,9 +1152,9 @@
   // ───────────────────────── 홈 ─────────────────────────
   function viewHome() {
     var r = state.round;
-    var html = topbar('골프 스코어', '', '', '');
+    var html = topbar('제이크의 야디지북', '', '', '');
     html += '<div class="screen">';
-    html += '<div class="hero"><div class="logo">⛳</div><h1>골프 스코어 & 게임</h1><p>개인 스코어 하나로 팀 대항 내기까지 자동 계산 · 동반자와 실시간 공유</p></div>';
+    html += '<div class="hero"><div class="logo">⛳</div><h1>제이크의 야디지북</h1><div class="en">Jake\'s Yardagebook</div><p>스코어 · 내기&nbsp;정산 · 홀&nbsp;약도 · 함께&nbsp;입력</p></div>'; // 좁은 화면에서는 가운뎃점 자리에서만 줄이 바뀐다
     if (r) {
       var done = holesDone(r);
       html += '<div class="card"><h2>진행 중인 라운드 <span class="hint">' + esc(r.date) + '</span></h2>' +

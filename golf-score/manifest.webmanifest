@@ -1,6 +1,6 @@
 {
-  "name": "골프 스코어 & 게임 계산기",
-  "short_name": "골프 스코어",
+  "name": "제이크의 야디지북",
+  "short_name": "야디지북",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

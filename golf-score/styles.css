@@ -240,6 +240,13 @@ tr.me td { font-weight: 700; }
 .histrow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .histrow:last-child { border-bottom: 0; }
 .histrow .t { font-weight: 700; } .histrow .s { font-size: 13px; color: var(--muted); }
+/* 골프장 받기 화면: 이름과 설명은 줄을 바꾸고 단추는 줄어들지 않는다 */
+.histrow .grow { min-width: 0; }
+.histrow .t, .histrow .s { word-break: keep-all; overflow-wrap: anywhere; }
+.histrow > .btn, .histrow > .chip { flex: 0 0 auto; white-space: nowrap; }
+/* 파일 고르기 단추: 안의 입력란은 보이지 않게 두고 단추 전체가 눌린다 */
+.filebtn { position: relative; overflow: hidden; cursor: pointer; }
+.filebtn input[type="file"] { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .skinlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 6px; }
 .skinlist div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 4px; text-align: center; font-size: 12px; }
 .skinlist div b { display: block; font-size: 14px; }

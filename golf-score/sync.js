@@ -825,8 +825,106 @@
     };
   }
 
+  // ───────────────────────── 코스 파일 (받기 · 보내기) ─────────────────────────
+  /**
+   * 코스 파일: 골프장 하나의 파·핸디캡·홀 정보와 (있으면) 홀 약도를 담은 JSON. 앱의 코스 목록에서 받거나, 사람끼리 파일로 주고받는다.
+   *   { format: 'golf-score-course', v: 1, name, holes: 9|18, pars: [...], strokeIndex: [...],
+   *     holeInfo: { '0': { dist, shape: 'S'|'L'|'R', haz: 비트마스크, memo }, … },      (기본 제공 코스 courses.js와 같은 모양)
+   *     map: [홀마다 { h, s, c, t, ip, o, f, g, b, w, d, cy, m, e }],                      (선택. coursemaps.js와 같은 모양)
+   *     note: 설명(선택), updated: 'YYYY-MM-DD'(선택) }
+   * 받은 파일은 남이 만든 것이므로 여기서 모두 검증해 새 객체로 옮겨 담는다. 약도의 숫자는 화면에서 SVG에 그대로 들어가므로
+   * 숫자가 아닌 값은 하나도 통과시키지 않는다.
+   */
+  var COURSE_FORMAT = 'golf-score-course', COURSE_FILE_V = 1, COURSE_FILE_MAX = 400000; // 파일 글자 수 한도 (18홀 약도 포함 코스가 약 6만 자)
+  function isNum(v) { return typeof v === 'number' && isFinite(v); }
+  function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+  /** 홀 약도 하나 검증 → 정리한 새 객체, 올바르지 않으면 null */
+  function cleanHoleMap(m) {
+    if (!isObj(m) || !isNum(m.h) || !(m.h >= 100 && m.h <= 2500) || !isNum(m.s) || !(m.s >= 0.5 && m.s <= 10)) return null;
+    var H = Math.round(m.h), bad = false;
+    function X(v) { if (!isNum(v) || v < -5 || v > 505) { bad = true; return 0; } return Math.round(v); }
+    function Y(v) { if (!isNum(v) || v < -5 || v > H + 5) { bad = true; return 0; } return Math.round(v); }
+    function dist(v, lo) { if (!isNum(v) || v < lo || v > 700) { bad = true; return 0; } return Math.round(v); }
+    function list(v, min, max) { if (v === undefined || v === null) v = []; if (!Array.isArray(v) || v.length < min || v.length > max) { bad = true; return []; } return v; }
+    function points(v, min, max) { return list(v, min, max).map(function (p) { if (!Array.isArray(p) || p.length !== 2) { bad = true; return [0, 0]; } return [X(p[0]), Y(p[1])]; }); }
+    function polys(v, min, max) {
+      return list(v, min, max).map(function (a) {
+        if (!Array.isArray(a) || a.length < 6 || a.length > 600 || a.length % 2) { bad = true; return []; }
+        return a.map(function (n, i) { return i % 2 ? Y(n) : X(n); });
+      });
+    }
+    var out = { h: H, s: Math.round(m.s * 1000) / 1000 };
+    out.c = points(m.c, 1, 2);
+    out.t = list(m.t, 1, 8).map(function (t) {
+      if (!Array.isArray(t) || t.length !== 4 || typeof t[0] !== 'string' || t[0].length !== 1 || 'KBWYR'.indexOf(t[0]) < 0) { bad = true; return ['W', 0, 0, 0]; }
+      return [t[0], X(t[1]), Y(t[2]), dist(t[3], 30)];
+    });
+    out.ip = points(m.ip, 0, 4);
+    out.o = polys(m.o, 1, 1); out.f = polys(m.f, 0, 60); out.g = polys(m.g, 1, 4); out.b = polys(m.b, 0, 60); out.w = polys(m.w, 0, 60); out.d = polys(m.d, 0, 60);
+    out.cy = list(m.cy, 0, 12).map(function (q) {
+      if (!Array.isArray(q) || q.length !== 4 || (q[3] !== 'L' && q[3] !== 'R' && q[3] !== 'C')) { bad = true; return [0, 0, 0, 'C']; }
+      return [X(q[0]), Y(q[1]), dist(q[2], 1), q[3]];
+    });
+    out.m = list(m.m, 0, 30).map(function (q) { if (!Array.isArray(q) || q.length !== 3) { bad = true; return [0, 0, 0]; } return [X(q[0]), Y(q[1]), dist(q[2], 1)]; });
+    out.e = list(m.e, 0, 5).map(function (v) { if (!isNum(v) || v < -300 || v > 300) { bad = true; return 0; } return Math.round(v); });
+    return bad ? null : out;
+  }
+  /**
+   * 코스 파일(JSON으로 읽은 객체)을 검증해 정리한다.
+   * 반환 { ok: true, course: { name, holes, pars, strokeIndex, holeInfo, map(없으면 null), note, updated } }
+   *   또는 { ok: false, why: 'format' | 'newer' | 'name' | 'holes' | 'pars' | 'si' | 'info' | 'map' }
+   */
+  function readCourseFile(obj) {
+    function no(why) { return { ok: false, why: why }; }
+    if (!isObj(obj) || obj.format !== COURSE_FORMAT || !isNum(obj.v) || obj.v < 1 || Math.floor(obj.v) !== obj.v) return no('format');
+    if (obj.v > COURSE_FILE_V) return no('newer'); // 더 새로운 앱이 만든 파일: 모르는 내용을 버리고 받지 않는다
+    var name = typeof obj.name === 'string' ? cleanStr(obj.name, COURSE_MAX).trim() : '';
+    if (!name) return no('name');
+    var holes = obj.holes;
+    if (holes !== 9 && holes !== 18) return no('holes');
+    function ints(a, lo, hi) { return Array.isArray(a) && a.length === holes && a.every(function (v) { return isInt(v) && v >= lo && v <= hi; }); }
+    if (!ints(obj.pars, 3, 6)) return no('pars');
+    if (!ints(obj.strokeIndex, 1, holes)) return no('si');
+    var info = {}, src = obj.holeInfo === undefined || obj.holeInfo === null ? {} : obj.holeInfo;
+    if (!isObj(src)) return no('info');
+    for (var h = 0; h < holes; h++) {
+      var i = src[h];
+      if (i === undefined || i === null) continue;
+      if (!isObj(i)) return no('info');
+      var o = {};
+      if (i.dist !== undefined && i.dist !== null) { if (!isInt(i.dist) || i.dist < 1 || i.dist > 999) return no('info'); o.dist = i.dist; }
+      if (i.shape !== undefined && i.shape !== null) { if (i.shape !== 'S' && i.shape !== 'L' && i.shape !== 'R') return no('info'); o.shape = i.shape; }
+      if (i.haz !== undefined && i.haz !== null) { if (!isInt(i.haz) || i.haz < 0 || i.haz > 255) return no('info'); if (i.haz) o.haz = i.haz; }
+      if (i.memo !== undefined && i.memo !== null) {
+        if (typeof i.memo !== 'string') return no('info');
+        var memo = cleanStr(i.memo.replace(/[\r\n\t]+/g, ' '), MEMO_MAX).trim(); // 라운드에 넣을 때(setKey)와 같은 정리
+        if (memo) o.memo = memo;
+      }
+      if (Object.keys(o).length) info[h] = o;
+    }
+    var map = null;
+    if (obj.map !== undefined && obj.map !== null) {
+      if (!Array.isArray(obj.map) || obj.map.length !== holes) return no('map');
+      map = [];
+      for (var k = 0; k < holes; k++) { var hm = cleanHoleMap(obj.map[k]); if (!hm) return no('map'); map.push(hm); }
+    }
+    return { ok: true, course: {
+      name: name, holes: holes, pars: obj.pars.slice(), strokeIndex: obj.strokeIndex.slice(), holeInfo: info, map: map,
+      note: typeof obj.note === 'string' ? cleanStr(obj.note.replace(/[\r\n\t]+/g, ' '), 200).trim() : '',
+      updated: typeof obj.updated === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(obj.updated) ? obj.updated : ''
+    } };
+  }
+  /** 코스를 코스 파일 내용(객체)으로. course: { name, holes, pars, strokeIndex, holeInfo }, map: 홀 약도 배열(없으면 생략) */
+  function makeCourseFile(course, map, meta) {
+    var out = { format: COURSE_FORMAT, v: COURSE_FILE_V, name: course.name, holes: course.holes, pars: course.pars, strokeIndex: course.strokeIndex, holeInfo: course.holeInfo || {} };
+    if (map) out.map = map;
+    if (meta && meta.note) out.note = meta.note;
+    if (meta && meta.updated) out.updated = meta.updated;
+    return out;
+  }
+
   return {
-    BUILD: 12, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 13, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, HAZ_BITS: HAZ_BITS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,
@@ -834,6 +932,7 @@
     getKey: getKey, setKey: setKey, allKeys: allKeys, exportKeys: exportKeys, project: project, diffAndStamp: diffAndStamp,
     stampAll: stampAll, stamp: stamp, merge: merge, hasKeysMissingFrom: hasKeysMissingFrom, roundFromSnapshot: roundFromSnapshot, ensureScores: ensureScores,
     deriveRoom: deriveRoom, seal: seal, open: open, parseBrokerUrl: parseBrokerUrl,
-    createSession: createSession
+    createSession: createSession,
+    COURSE_FORMAT: COURSE_FORMAT, COURSE_FILE_MAX: COURSE_FILE_MAX, readCourseFile: readCourseFile, makeCourseFile: makeCourseFile
   };
 });

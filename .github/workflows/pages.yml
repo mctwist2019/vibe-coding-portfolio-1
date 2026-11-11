@@ -36,6 +36,9 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true # 저장소에 Pages가 아직 켜져 있지 않으면 첫 실행에서 켬 (Source: GitHub Actions)
+      # 코스 폴더(golf-score/courses)의 코스 파일로 목록(index.json)을 만든다: 폴더에 파일을 넣기만 하면 앱의 "골프장 받기"에 나온다
+      - name: Build the course list
+        run: node golf-score/tools/build-course-index.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .

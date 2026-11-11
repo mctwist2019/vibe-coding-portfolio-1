@@ -6,22 +6,28 @@
   var api = factory();
   // 브라우저 전용 안전장치. 갱신 도중 app.js만 못 받으면 기기에 저장돼 있던 예전 app.js가 이 파일과 섞여 실행된다. 예전 app.js는 이 파일이 내놓는
   // 새 이름을 몰라서, 버전에 따라 스스로 '업데이트 중' 안내를 띄우거나(5cb3e2a), 빈 화면으로 멈추거나, 일부 화면만 그린 채 돌아간다(그보다 앞선 버전).
-  // 그래서 페이지를 다 읽은 뒤에 '이 파일과 같은 버전의 app.js가 실행됐는지'(app.js가 window.__gsApp에 적는다)를 보고, 아니면 화면 전체를 덮는
-  // 안내를 띄우고 두 번까지 다시 받아 본다 (app.js의 안내와 같은 동작. app.js를 아예 못 받은 경우에도 뜬다).
+  // 그래서 index.html의 스크립트가 모두 실행된 직후에 '이 파일과 같은 버전의 app.js가 실행됐는지'(app.js가 window.__gsApp에 적는다)를 보고, 아니면
+  // 화면 전체를 덮는 안내를 띄우고 두 번까지 다시 받아 본다 (app.js의 안내와 같은 동작. app.js를 아예 못 받은 경우에도 뜬다).
+  // 확인은 DOMContentLoaded에서 한다: 예전 app.js가 실행 중에 넣는 스크립트(MQTT 라이브러리)가 느리면 load는 그만큼 늦어진다. load는 만일을 위한 두 번째 기회다.
   // games.js · analysis.js · sync.js 가운데 하나만 새것일 수도 있어 세 파일에 똑같이 있고, 한 번만 등록된다
   if (typeof document !== 'undefined' && typeof root.addEventListener === 'function' && !root.__gsAppWatch) {
     root.__gsAppWatch = true;
-    root.addEventListener('load', function () {
-      if (root.__gsApp === api.BUILD || document.getElementById('retry-load')) return; // 짝이 맞는 app.js가 실행됐거나, app.js가 이미 안내를 띄웠다
-      var tries = 0, box = document.createElement('div');
+    var appCheck = function () {
+      if (root.__gsAppWatch === 'done') return;
+      root.__gsAppWatch = 'done';
+      if (root.__gsApp === api.BUILD || document.getElementById('retry-load') || !document.body) return; // 짝이 맞는 app.js가 실행됐거나, app.js가 이미 안내를 띄웠다
+      var tries = 0, box = document.createElement('div'), old = document.getElementById('app');
       try { tries = Number(sessionStorage.getItem('gs.mismatch')) || 0; sessionStorage.setItem('gs.mismatch', String(tries + 1)); } catch (e) { tries = 9; }
+      if (old) old.style.display = 'none'; // 예전 app.js가 그려 둔 화면은 숨긴다 (안내 아래에서 키보드로 눌리지 않게)
       box.setAttribute('style', 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;overflow:auto;background:#f3f6f2');
       box.innerHTML = '<div class="screen"><div class="card"><h2>앱을 업데이트하는 중이에요</h2><div class="muted">새 버전의 파일을 일부만 받았어요. 인터넷이 연결된 곳에서 다시 열면 이어서 받아요. 입력해 둔 점수는 기기에 그대로 있어요.</div>' +
         '<button class="btn primary block" id="retry-load" style="margin-top:12px">다시 시도</button></div></div>';
       document.body.appendChild(box);
       document.getElementById('retry-load').addEventListener('click', function () { location.reload(); });
       if (tries < 2) setTimeout(function () { location.reload(); }, 1500);
-    });
+    };
+    document.addEventListener('DOMContentLoaded', appCheck);
+    root.addEventListener('load', appCheck);
   }
   root.GolfGames2 = api; // 이름의 2: 예전 app.js(이 이름을 모른다)가 새 파일과 섞여 실행되면 '업데이트 중' 안내를 띄우게 한다
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

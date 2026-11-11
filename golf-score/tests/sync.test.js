@@ -435,7 +435,7 @@ test('new game settings (skins fund and OECD, 오장, double-par cap) are valida
   const r = { id: 'r', holes: 18, date: 'd', createdAt: 1, name: 'n', pars: Array(18).fill(4), strokeIndex: Array.from({ length: 18 }, (_, i) => i + 1),
     players: [{ id: 'a', name: 'A', hcp: 0, team: '' }], scores: { a: Array(18).fill(null) }, extras: {}, status: 'live', rev: {},
     games: { skins: { enabled: true, net: false, mode: 'individual', unit: 1000, fund: true, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, collect: true, oecd: true, fine: 10000 } } };
-  assert.deepEqual(Object.keys(S.GAME_SCHEMA.skins).sort(), ['caddie', 'collect', 'enabled', 'fine', 'fund', 'mode', 'net', 'oecd', 'prize', 'stake', 'start', 'tip', 'unit']);
+  assert.deepEqual(Object.keys(S.GAME_SCHEMA.skins).sort(), ['caddie', 'collect', 'enabled', 'fine', 'fund', 'mode', 'net', 'oecd', 'playorder', 'prize', 'stake', 'start', 'tip', 'unit']);
   ['fund', 'stake', 'prize', 'start', 'tip', 'caddie', 'collect', 'oecd', 'fine'].forEach((f) => assert.ok(S.allKeys(r).includes('gm:skins:' + f), f));
   assert.equal(S.getKey(r, 'gm:skins:stake'), 100000);
   assert.equal(S.setKey(r, 'gm:skins:stake', 50000), true); assert.equal(r.games.skins.stake, 50000);
@@ -446,6 +446,9 @@ test('new game settings (skins fund and OECD, 오장, double-par cap) are valida
   assert.equal(S.setKey(r, 'gm:skins:collect', false), true); assert.equal(r.games.skins.collect, false);
   assert.equal(S.setKey(r, 'gm:skins:collect', 'yes'), false); assert.equal(r.games.skins.collect, false);
   assert.equal(S.setKey(r, 'gm:skins:join', 3), false, 'no such setting');
+  assert.equal(S.allKeys(r).includes('gm:skins:playorder'), false, 'a round without the stamp does not send one');
+  assert.equal(S.setKey(r, 'gm:skins:playorder', true), true); assert.equal(r.games.skins.playorder, true);
+  assert.ok(S.allKeys(r).includes('gm:skins:playorder'));
   // 오장 설정과 양파 한도
   assert.deepEqual(Object.keys(S.GAME_SCHEMA.ojang).sort(), ['birdie', 'carry', 'enabled', 'near', 'net', 'unit']);
   assert.equal(S.setKey(r, 'gm:ojang:unit', 5000), true); assert.equal(r.games.ojang.unit, 5000);
@@ -455,4 +458,35 @@ test('new game settings (skins fund and OECD, 오장, double-par cap) are valida
   assert.equal(S.setKey(r, 'gm:stroke:cap', true), true); assert.equal(r.games.stroke.cap, true);
   assert.equal(S.setKey(r, 'gm:stroke:cap', 2), false);
   assert.ok(S.allKeys(r).includes('gm:ojang:unit') && S.allKeys(r).includes('gm:stroke:cap'));
+});
+
+test('the chosen start hole is shared: it changes the skins carry order, so every device must use the same one', () => {
+  const mk = () => ({ id: 'r', holes: 18, date: 'd', createdAt: 1, name: 'n', pars: Array(18).fill(4), strokeIndex: Array.from({ length: 18 }, (_, i) => i + 1),
+    players: [{ id: 'a', name: 'A', hcp: 0, team: '' }], scores: { a: Array(18).fill(null) }, extras: {}, status: 'live', rev: {}, games: {} });
+  const a = mk(), b = mk();
+  assert.equal(S.allKeys(a).includes('start'), false, 'nothing is sent while the start hole is automatic');
+  assert.equal(S.getKey(a, 'start'), '');
+  const clock = S.createClock ? S.createClock() : { now: () => 1000 };
+  let d = S.diffAndStamp(a, S.project(a), clock, 'me');
+  assert.deepEqual(d.changed, []);
+  a.startBack = true;
+  d = S.diffAndStamp(a, d.projection, clock, 'me');
+  assert.deepEqual(d.changed, ['start']);
+  assert.equal(S.getKey(a, 'start'), 'in');
+  // 다른 기기가 받는다
+  let res = S.merge(b, S.exportKeys(a, ['start']));
+  assert.deepEqual(res.changed, ['start']); assert.equal(b.startBack, true);
+  // 1번홀로 바꾸고, 다시 자동으로 되돌린 것도 전해진다
+  a.startBack = false; d = S.diffAndStamp(a, d.projection, clock, 'me');
+  S.merge(b, S.exportKeys(a, ['start'])); assert.equal(b.startBack, false);
+  delete a.startBack; d = S.diffAndStamp(a, d.projection, clock, 'me');
+  assert.deepEqual(d.changed, ['start']);
+  assert.ok(S.allKeys(a).includes('start'), 'the cleared choice is still sent (its timestamp is kept)');
+  S.merge(b, S.exportKeys(a, ['start'])); assert.equal(b.startBack, undefined);
+  // 이상한 값은 받지 않는다
+  assert.equal(S.setKey(b, 'start', 'in'), true); assert.equal(b.startBack, true);
+  assert.equal(S.setKey(b, 'start', 'back'), false); assert.equal(S.setKey(b, 'start', 1), false); assert.equal(b.startBack, true);
+  assert.equal(S.setKey(b, 'start', null), true); assert.equal(b.startBack, undefined);
+  res = S.merge(b, { 'start:1': { v: 'in', ts: 9e6, by: 'x' }, starts: { v: 'in', ts: 9e6, by: 'x' } });
+  assert.deepEqual(res.changed, []);
 });

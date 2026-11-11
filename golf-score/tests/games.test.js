@@ -240,7 +240,7 @@ test('skins fund: stakes make the fund, start hand-outs and hole prizes come out
   const r = oecdRound({ a: [3, 3, 4, 5], b: [4, 4, 4, 4], c: [4, 4, 4, 5], d: [5, 5, 5, 5] });
   const res = G.skins(r, FUND);
   assert.deepEqual(res.fund, { stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, fine: 10000, oecd: false, players: 4,
-    total: 400000, startOut: 50000, paid: 80000, fines: 0, left: 270000, rest: 120000, share: 30000, caddieTotal: 160000, collect: false, cash: 0, caddieDue: 160000 });
+    total: 400000, startOut: 50000, paid: 80000, fines: 0, left: 270000, rest: 120000, share: 30000, even: true, caddieTotal: 160000, collect: false, cash: 0, caddieDue: 160000 });
   assert.deepEqual(skinsOf(res), { a: 2, b: 2, c: 0, d: 0 });
   assert.equal(res.holes[3].amount, 40000, 'a carried skin doubles the prize');
   const e = Object.fromEntries(res.entrants.map((x) => [x.id, x]));
@@ -399,8 +399,8 @@ test('play order: a round that starts on hole 10 carries skins, OECD membership 
   const o = Object.assign({ oecd: true }, FUND);
   assert.deepEqual(G.skins(r3, Object.assign({ order: back }, o)).holes[0].oecd.map((x) => x.fine), [10000]);
   assert.equal(G.skins(r3, o).holes[0].oecd, undefined, 'in hole-number order hole 1 comes before the skins were won');
-  // computeAll이 순서를 넘겨 준다. 잘못된 순서는 홀 번호 순으로 대신한다
-  r.games = { skins: { enabled: true, unit: 1000, mode: 'individual' } };
+  // computeAll이 순서를 넘겨 준다 (스킨스는 playorder 표시가 있는 라운드만). 잘못된 순서는 홀 번호 순으로 대신한다
+  r.games = { skins: { enabled: true, unit: 1000, mode: 'individual', playorder: true } };
   assert.equal(G.computeAll(r, { order: back }).skins.holes[0].skins, 2);
   assert.equal(G.computeAll(r).skins.holes[0].skins, 1);
   assert.equal(G.computeAll(r, { order: [0, 0, 1] }).skins.holes[0].skins, 1);
@@ -602,4 +602,79 @@ test('오장 through computeAll: counted only when switched on, zero-sum, works 
   r.games.stroke = { cap: true };
   const capped = G.computeAll(r).ojang.rows.find((x) => x.id === 'd').amount;
   assert.ok(capped > before, 'a 12 counted as 8 costs less: ' + before + ' → ' + capped);
+});
+
+test('records made before the update keep hole-number carry: skins follows the play order only on rounds stamped with playorder', () => {
+  // 예전 버전에서 10번홀 출발로 친 라운드: 10번홀은 a, 1번홀은 b가 버디, 나머지는 전원 파
+  const back = [9, 10, 11, 12, 13, 14, 15, 16, 17, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+  const sc = { a: Array(18).fill(4), b: Array(18).fill(4), c: Array(18).fill(4), d: Array(18).fill(4) };
+  sc.a[9] = 3; sc.b[0] = 3;
+  const players = ['a', 'b', 'c', 'd'].map((id) => ({ id, name: id.toUpperCase(), hcp: 0, team: '' }));
+  const old = mkRound(players, sc, { pars: Array(18).fill(4), games: { skins: { enabled: true, net: false, mode: 'individual', unit: 1000 } } });
+  const nets = (all) => Object.fromEntries(all.settlement.rows.map((x) => [x.id, x.net]));
+  // 예전 계산(홀 번호 순): 1번홀 b 1스킨, 10번홀 a 9스킨(2~9번홀 이월). 친 순서를 넘겨도 그대로다
+  assert.deepEqual(nets(G.computeAll(old)), { a: 26000, b: -6000, c: -10000, d: -10000 });
+  assert.deepEqual(G.computeAll(old, { order: back }).settlement, G.computeAll(old).settlement, 'an old record is not recomputed in play order');
+  assert.deepEqual(G.computeAll(old, { order: back }).skins.transfers, G.computeAll(old).skins.transfers);
+  // 설정을 채운 뒤(playorder: false)에도 같다
+  old.games.skins = Object.assign({ fund: false, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, collect: false, oecd: false, fine: 10000, playorder: false }, old.games.skins);
+  assert.deepEqual(nets(G.computeAll(old, { order: back })), { a: 26000, b: -6000, c: -10000, d: -10000 });
+  // 이 버전에서 만든 라운드(playorder: true)는 친 순서: 10번홀 a 1스킨, 1번홀 b 9스킨(11~18번홀 이월)
+  old.games.skins.playorder = true;
+  assert.deepEqual(nets(G.computeAll(old, { order: back })), { a: -6000, b: 26000, c: -10000, d: -10000 });
+  assert.deepEqual(nets(G.computeAll(old)), { a: 26000, b: -6000, c: -10000, d: -10000 }, 'no order given: hole-number order');
+  // 오장은 새로 생긴 게임이라 표시와 상관없이 친 순서를 따른다
+  const tie = mkRound(players.slice(0, 2), { a: Array(18).fill(null), b: Array(18).fill(null) }, { pars: Array(18).fill(4), games: { skins: { unit: 1000 }, ojang: { enabled: true, unit: 5000 } } });
+  tie.scores.a[17] = 4; tie.scores.b[17] = 4; tie.scores.a[0] = 3; tie.scores.b[0] = 4;
+  assert.deepEqual(G.computeAll(tie, { order: back }).ojang.holes[0].reasons, ['버디', '앞 홀 전원 동타']);
+  assert.equal(G.computeAll(tie, { order: back }).skins.holes[0].skins, 1);
+});
+
+test('skins fund: an uneven split is made in whole won, so the payments to the caddie add up to the caddie money', () => {
+  // 3명, 기본 금액, 각자 6홀씩 단독 승: 모자란 돈 250,000원을 셋이 나누면 83,333.33…원
+  const sc = { a: [], b: [], c: [] };
+  for (let h = 0; h < 18; h++) { sc.a.push(h % 3 === 0 ? 3 : 4); sc.b.push(h % 3 === 1 ? 3 : 4); sc.c.push(h % 3 === 2 ? 3 : 4); }
+  const r = oecdRound(sc);
+  const res = G.skins(r, FUND);
+  assert.equal(res.fund.rest, -250000); assert.equal(res.fund.even, false);
+  assert.ok(Math.abs(res.fund.share + 250000 / 3) < 1e-6, 'the label amount stays the plain average');
+  const by = Object.fromEntries(res.entrants.map((e) => [e.id, e]));
+  assert.deepEqual([by.a.share, by.b.share, by.c.share], [-83333, -83333, -83334], 'whole won; the odd won go to the first players');
+  assert.equal(res.entrants.reduce((t, e) => t + e.share, 0), -250000);
+  assert.deepEqual(finalOf(res), { a: -53333, b: -53333, c: -53334 });
+  const s = G.settle(res.transfers, r.players);
+  assert.equal(s.rows.reduce((t, x) => t + x.net, 0), -160000);
+  assert.equal(s.payments.filter((p) => p.to === '#caddie').reduce((t, p) => t + p.amount, 0), res.fund.caddieTotal, 'the caddie gets exactly 160,000');
+  assert.ok(s.payments.every((p) => p.from.charAt(0) !== '#'), 'the fund account never appears as a payer when nothing was collected');
+  // 미리 걷은 경우에도 걷어 둔 돈이 정확히 다 나간다
+  const col = G.skins(r, Object.assign({ collect: true }, FUND));
+  const sc2 = G.settle(col.transfers, r.players, col.done);
+  assert.equal(sc2.payments.filter((p) => p.from === '#pot').reduce((t, p) => t + p.amount, 0) - sc2.payments.filter((p) => p.to === '#pot').reduce((t, p) => t + p.amount, 0), col.fund.cash);
+  assert.equal(sc2.payments.filter((p) => p.to === '#caddie').reduce((t, p) => t + p.amount, 0), col.fund.caddieDue);
+  // 남는 경우: 3명, 시작 지급 없음, 캐디피를 내고 100,000원이 남는다 → 33,334 · 33,333 · 33,333
+  const sur = G.skins(oecdRound({ a: [3, 3, 3, 3, 3], b: [4, 4, 4, 4, 4], c: [4, 4, 4, 4, 4] }), { mode: 'individual', fund: true, stake: 100000, prize: 10000, start: 0, tip: 0, caddie: 150000 });
+  assert.equal(sur.fund.rest, 100000);
+  assert.deepEqual(sur.entrants.map((e) => e.share).sort((x, y) => y - x), [33334, 33333, 33333]);
+  assert.equal(sur.entrants.reduce((t, e) => t + e.final, 0), -150000);
+  // 여러 인원·금액에서 항상 맞는다
+  for (let n = 2; n <= 8; n++) {
+    const scs = {}; for (let i = 0; i < n; i++) scs['p' + i] = Array.from({ length: 18 }, (_, h) => (h % n === i ? 3 : 4));
+    const rr = oecdRound(scs);
+    [[100000, 20000, 10000, 10000, 150000], [100001, 3333, 7, 999, 33333], [50000, 10000, 0, 0, 0], [1, 1, 1, 1, 1]].forEach(([stake, prize, start, tip, caddie]) => {
+      const x = G.skins(rr, { mode: 'individual', fund: true, stake, prize, start, tip, caddie });
+      assert.ok(x.entrants.every((e) => Number.isInteger(e.final) && Number.isInteger(e.share)), 'whole won for ' + n);
+      assert.equal(x.entrants.reduce((t, e) => t + e.share, 0), x.fund.rest);
+      const st = G.settle(x.transfers, rr.players);
+      assert.equal(st.payments.filter((p) => p.to === '#caddie').reduce((t, p) => t + p.amount, 0), tip + caddie, n + ' players');
+      assert.equal(st.rows.reduce((t, y) => t + y.net, 0) + tip + caddie, 0);
+    });
+  }
+});
+
+test('all files carry the same build number as the service worker cache', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const dir = path.join(__dirname, '..');
+  const sw = Number(/CACHE = 'golf-score-v(\d+)'/.exec(fs.readFileSync(path.join(dir, 'sw.js'), 'utf8'))[1]);
+  const app = Number(/var BUILD = (\d+);/.exec(fs.readFileSync(path.join(dir, 'app.js'), 'utf8'))[1]);
+  assert.equal(G.BUILD, sw); assert.equal(require('../analysis.js').BUILD, sw); assert.equal(require('../sync.js').BUILD, sw); assert.equal(app, sw);
 });

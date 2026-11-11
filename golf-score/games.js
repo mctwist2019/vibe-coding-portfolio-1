@@ -280,10 +280,11 @@
    *      가입한 채로 시작한 홀에서 벌칙 항목에 걸리면 항목마다 opt.fine을 공금에 넣는다 (받은 돈 이상은 내지 않는다).
    *      끝나면 공금에 남은 돈으로 캐디피(opt.caddie)를 내고, 모자라면 전원이 똑같이 나눠 내며 남으면 똑같이 돌려받는다.
    *      마지막까지 이월된 스킨의 상금은 공금에 남는다.
-   *      사람별 최종 금액 = 시작 지급 + 상금 − 벌금 − 낸 돈 + (남은 돈 − 캐디피) ÷ 인원. 실제로 돈을 미리 걷을 필요는 없다:
+   *      사람별 최종 금액 = 시작 지급 + 상금 − 벌금 − 낸 돈 + (남은 돈 − 캐디피) ÷ 인원 (원 단위로 나눈다). 실제로 돈을 미리 걷을 필요는 없다:
    *      송금은 가상 계정 '#pot'(공금)을 거치고, 캐디 몫(시작 지급 + 캐디피)은 '#caddie'가 받는 것으로 낸다
    *      (settle이 손익 표에서는 빼고 송금 정리에는 넣는다).
    * opt.order: 홀을 친 순서(홀 인덱스 배열). 10번홀에서 출발한 라운드는 18번홀의 이월·OECD 가입이 1번홀로 이어진다. 없으면 홀 번호 순
+   *   (computeAll은 round.games.skins.playorder가 켜진 라운드에만 순서를 넘긴다)
    */
   function skins(round, opt) {
     opt = opt || {};
@@ -360,14 +361,17 @@
     var startOut = start * n + tip;                       // 시작할 때 나눠 준 돈
     var left = total - startOut - paid + fines;           // 캐디피를 내기 전 공금에 남은 돈
     var rest = left - caddie, share = rest / n;           // 캐디피를 낸 뒤: 남으면(+) 똑같이 돌려받고 모자라면(−) 똑같이 더 낸다
+    // 나누어떨어지지 않으면 원 단위로 나눈다: 몫은 내림, 남는 1원들은 앞 사람부터 하나씩. 그래야 사람별 금액의 합이 정확히 맞고
+    // 캐디에게 가는 송금 합계가 캐디 몫과 1원도 어긋나지 않는다 (3명이 160,000원을 나누면 53,334 · 53,333 · 53,333)
+    var base = Math.floor(rest / n), extra = rest - base * n;
     res.fund = { stake: stake, prize: prize, start: start, tip: tip, caddie: caddie, fine: fine, oecd: oecd, players: n,
-      total: total, startOut: startOut, paid: paid, fines: fines, left: left, rest: rest, share: share, caddieTotal: tip + caddie,
+      total: total, startOut: startOut, paid: paid, fines: fines, left: left, rest: rest, share: share, even: extra === 0, caddieTotal: tip + caddie,
       // 끝나고 실제로 오갈 돈: 미리 걷었으면 봉투에 남은 돈(공금 − 시작 지급)에서 나눠 주고 캐디에게는 캐디피만, 안 걷었으면 처음부터 전부
       collect: collect, cash: collect ? total - startOut : 0, caddieDue: collect ? caddie : tip + caddie };
-    res.entrants = ents.map(function (e) {
-      var take = held(e), fin = take - stake + share;
+    res.entrants = ents.map(function (e, i) {
+      var take = held(e), mine = base + (i < extra ? 1 : 0), fin = take - stake + mine;
       // due: 끝나고 이 사람에게 줄 돈(+) 또는 이 사람이 낼 돈(−). 미리 걷었으면 낸 돈과 시작 지급은 이미 오간 것으로 본다
-      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id], start: start, prize: got[e.id], fines: fined[e.id], take: take, final: fin,
+      return { id: e.id, name: e.name, pids: e.pids, skins: won[e.id], start: start, prize: got[e.id], fines: fined[e.id], take: take, share: mine, final: fin,
         due: collect ? fin + stake - start : fin, oecd: isMember(e) };
     }).sort(function (a, b) { return b.skins - a.skins || b.final - a.final; });
     res.entrants.forEach(function (e) {
@@ -774,7 +778,9 @@
     }
     add('stroke', strokePlay(round, g.stroke || {}), true);
     out.stableford = stableford(round, g.stableford || {});
-    add('skins', skins(round, withOrder(g.skins)), g.skins && g.skins.enabled);
+    // 스킨스는 playorder 표시가 있는 라운드만 친 순서를 따른다. 이 표시가 없는 라운드(업데이트 전에 만든 기록)는 예전처럼 홀 번호 순이라
+    // 이미 정산한 금액이 바뀌지 않는다. 오장은 새로 생긴 게임이라 언제나 친 순서다
+    add('skins', skins(round, g.skins && g.skins.playorder ? withOrder(g.skins) : (g.skins || {})), g.skins && g.skins.enabled);
     add('ojang', ojang(round, withOrder(g.ojang)), g.ojang && g.ojang.enabled);
     add('match', matchPlay(round, g.match || {}), g.match && g.match.enabled);
     if (round.holes === 18) add('nassau', nassau(round, g.nassau || {}), g.nassau && g.nassau.enabled);
@@ -789,6 +795,7 @@
   }
 
   return {
+    BUILD: 11, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     defaultStrokeIndex: defaultStrokeIndex,
     defaultPars: defaultPars,
     strokesPerHole: strokesPerHole,

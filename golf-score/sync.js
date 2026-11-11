@@ -25,7 +25,7 @@
   var GAME_SCHEMA = {
     stroke: { enabled: 'bool', net: 'bool', unit: 'money', cap: 'bool' },
     stableford: { enabled: 'bool', net: 'bool' },
-    skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money', fund: 'bool', stake: 'money', prize: 'money', start: 'money', tip: 'money', caddie: 'money', collect: 'bool', oecd: 'bool', fine: 'money' },
+    skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money', fund: 'bool', stake: 'money', prize: 'money', start: 'money', tip: 'money', caddie: 'money', collect: 'bool', oecd: 'bool', fine: 'money', playorder: 'bool' },
     ojang: { enabled: 'bool', net: 'bool', unit: 'money', carry: 'bool', birdie: 'bool', near: 'bool' },
     match: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
     nassau: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
@@ -43,6 +43,8 @@
    * 홀별 코스 정보(선택 입력): round.holeInfo[hole] = { dist: 거리(1~999), shape: 'S' 직선 | 'L' 좌 도그렉 | 'R' 우 도그렉,
    *   haz: 위험 요소 비트(1 OB좌, 2 OB우, 4 해저드좌, 8 해저드우, 16 그린 앞 해저드, 32 벙커좌, 64 벙커우, 128 그린 주변 벙커), memo: 공략 메모 }
    * 코스 이름은 round.course
+   * 18홀 출발 홀을 직접 고른 값은 round.startBack(true 10번홀 · false 1번홀 · 없으면 입력 순서로 추정)이고 키 'start'('in' · 'out' · '')로 공유한다.
+   *   스킨스 이월과 오장의 '앞 홀'이 이 순서를 따르므로, 기기마다 다르면 같은 라운드의 정산이 달라진다
    * 위험 요소는 라운드 안에서는 비트마스크(haz) 하나지만 공유할 때는 비트마다 따로 보낸다: hi:<홀>:z<비트> = 1 | null.
    * 마스크를 한 키에 실으면 같은 홀의 서로 다른 위험 요소를 두 기기가 따로 표시했을 때 늦게 쓴 쪽이 다른 쪽 입력을 지운다.
    */
@@ -158,6 +160,7 @@
       case 'meta': return metaOf(round);
       case 'name': return round.name == null ? '' : round.name;
       case 'course': return round.course == null ? '' : String(round.course);
+      case 'start': return round.startBack === true ? 'in' : round.startBack === false ? 'out' : '';
       case 'hi': {
         var hi = round.holeInfo && round.holeInfo[+p[1]], hv = hi ? hi[p[2]] : null, gb = hazBit(p[2]);
         if (gb) return hazMask(hi) & gb ? 1 : null;
@@ -184,6 +187,10 @@
       case 'meta': return false; // 불변
       case 'name': round.name = cleanStr(v, 60); return true;
       case 'course': round.course = cleanStr(v, COURSE_MAX); return true;
+      case 'start':
+        if (v === 'in') round.startBack = true; else if (v === 'out') round.startBack = false;
+        else if (v === '' || v === null || v === undefined) delete round.startBack; else return false;
+        return true;
       case 'hi': {
         h = +p[1];
         var zb = hazBit(p[2]), hf = zb ? 'haz' : p[2];
@@ -263,6 +270,7 @@
   function allKeys(round) {
     var rev = round.rev || {};
     var keys = ['meta', 'name', 'status', 'course'];
+    if (round.startBack === true || round.startBack === false || rev.start) keys.push('start'); // 고른 적이 있을 때만 (rev가 남아 있으면 '자동'으로 되돌린 것도 전달)
     var h;
     (round.players || []).forEach(function (p) { keys.push('pl:' + p.id + ':name', 'pl:' + p.id + ':hcp', 'pl:' + p.id + ':team'); });
     Object.keys(GAME_SCHEMA).forEach(function (g) {
@@ -368,7 +376,7 @@
     return String(inc.by || '') > String(loc.by || '');
   }
   // 홀 번호는 앞자리 0 없는 표기만 허용: 'score:a:07'이 'score:a:7'과 같은 칸을 다른 rev 키로 덮어쓰지 못하게 함
-  var KEY_RE = /^(meta|name|status|course|hi:(0|[1-9]\d?):(dist|shape|memo|z(1|2|4|8|16|32|64|128))|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(sh|ob|hz|bk|pt|fw))$/;
+  var KEY_RE = /^(meta|name|status|course|start|hi:(0|[1-9]\d?):(dist|shape|memo|z(1|2|4|8|16|32|64|128))|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(sh|ob|hz|bk|pt|fw))$/;
 
   /**
    * 들어온 키들을 LWW로 병합. 반환: {changed:[키], localNewer:bool, maxTs}
@@ -788,6 +796,7 @@
   }
 
   return {
+    BUILD: 11, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, HAZ_BITS: HAZ_BITS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,

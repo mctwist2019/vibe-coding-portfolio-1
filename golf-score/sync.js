@@ -47,6 +47,8 @@
     'wss://test.mosquitto.org:8081/mqtt'
   ];
   var TEAMS = ['A', 'B', 'C', 'D'];
+  // 홀마다 적는 사람: 니어리스트 · 롱기스트 · 지우개(파3에서 니어를 지운 사람). 값은 플레이어 id
+  var EXTRA_FIELDS = ['nearest', 'longest', 'eraser'];
   var GAME_SCHEMA = {
     stroke: { enabled: 'bool', net: 'bool', unit: 'money', cap: 'bool' },
     stableford: { enabled: 'bool', net: 'bool' },
@@ -56,7 +58,7 @@
     nassau: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
     bestball: { enabled: 'bool', net: 'bool', count: 'count', unit: 'money' },
     vegas: { enabled: 'bool', net: 'bool', unit: 'money' },
-    bonus: { nearest: 'bool', longest: 'bool', birdie: 'bool', unit: 'money' }
+    bonus: { nearest: 'bool', longest: 'bool', birdie: 'bool', unit: 'money', parthree: 'bool', parfive: 'bool', eraser: 'bool' }
   };
   /**
    * 홀별 상세 기록(선택 입력): round.stats[pid][hole][field]
@@ -262,13 +264,13 @@
         round.scores[p[1]][h] = sc; return true;
       }
       case 'extra': {
-        h = +p[1]; if (!(h >= 0 && h < round.holes) || (p[2] !== 'nearest' && p[2] !== 'longest')) return false;
+        h = +p[1]; if (!(h >= 0 && h < round.holes) || EXTRA_FIELDS.indexOf(p[2]) < 0) return false;
         var pid = v === null || v === undefined || v === '' ? null : cleanPid(v);
         if (pid && !playerOf(round, pid)) return false;
         round.extras = round.extras || {};
         var cur = round.extras[h] || {};
         cur[p[2]] = pid;
-        if (!cur.nearest && !cur.longest) delete round.extras[h]; else round.extras[h] = cur;
+        if (!cur.nearest && !cur.longest && !cur.eraser) delete round.extras[h]; else round.extras[h] = cur;
         return true;
       }
       case 'st': {
@@ -311,7 +313,7 @@
     });
     for (h = 0; h < round.holes; h++) {
       var e = round.extras && round.extras[h];
-      ['nearest', 'longest'].forEach(function (f) {
+      EXTRA_FIELDS.forEach(function (f) {
         var k = 'extra:' + h + ':' + f;
         if ((e && e[f]) || rev[k]) keys.push(k);
       });
@@ -401,7 +403,7 @@
     return String(inc.by || '') > String(loc.by || '');
   }
   // 홀 번호는 앞자리 0 없는 표기만 허용: 'score:a:07'이 'score:a:7'과 같은 칸을 다른 rev 키로 덮어쓰지 못하게 함
-  var KEY_RE = /^(meta|name|status|course|start|hi:(0|[1-9]\d?):(dist|shape|memo|z(1|2|4|8|16|32|64|128))|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(sh|ob|hz|bk|pt|fw))$/;
+  var KEY_RE = /^(meta|name|status|course|start|hi:(0|[1-9]\d?):(dist|shape|memo|z(1|2|4|8|16|32|64|128))|pl:[A-Za-z0-9_-]{1,24}:(name|hcp|team)|gm:[a-z]+:[a-z]+|par:(0|[1-9]\d?)|si:(0|[1-9]\d?)|score:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?)|extra:(0|[1-9]\d?):(nearest|longest|eraser)|st:[A-Za-z0-9_-]{1,24}:(0|[1-9]\d?):(sh|ob|hz|bk|pt|fw))$/;
 
   /**
    * 들어온 키들을 LWW로 병합. 반환: {changed:[키], localNewer:bool, maxTs}
@@ -821,7 +823,7 @@
   }
 
   return {
-    BUILD: 11, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 12, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, HAZ_BITS: HAZ_BITS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,

@@ -45,6 +45,9 @@ button { cursor: pointer; }
 /* 스킨스 공금 표: 네 칸이라 좁은 화면에서 넘치지 않게 칸 여백을 줄이고 이름은 줄바꿈을 허용 */
 table.fund th, table.fund td { padding-left: 3px; padding-right: 3px; }
 table.fund td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
+/* 보너스 표: 열이 여섯 개라 좁은 화면에서 긴 이름은 줄을 바꾼다 (안 바꾸면 표가 화면 밖으로 나간다) */
+table.bonus th, table.bonus td { padding-left: 3px; padding-right: 3px; }
+table.bonus td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
 /* 정산의 개인별 손익: 이름·손익 줄 아래에 게임별 내역 줄. 내역은 '스킨스 +15,000원' 한 덩어리 안에서는 줄을 바꾸지 않는다 */
 table.settle td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
 table.settle tr.hassub td { border-bottom: 0; padding-bottom: 2px; }
@@ -122,6 +125,8 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 .chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 .chip.accent.active { background: var(--accent); color: #3a2d00; border-color: var(--accent); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* 지우개로 지워진 니어 */
+.chip.accent.active.erased { text-decoration: line-through; opacity: .6; }
 .blab { flex: 0 0 auto; min-width: 64px; white-space: nowrap; }
 
 /* ── Play screen ─────────────────────────── */

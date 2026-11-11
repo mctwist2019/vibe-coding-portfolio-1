@@ -482,3 +482,15 @@ test('coach: no rank talk while a hole that two or more players entered is missi
   assert.match(A.coach(two, 'a').cheers.join(' '), /지금 단독 선두/);
   assert.match(A.coach(two, 'b').cheers.join(' '), /선두와 1타 차/);
 });
+
+test('playerStats: nearest and longest counts follow the round rules (par-3 / par-5 only, eraser)', () => {
+  // 9홀 기본 파: 4,4,3,5,4,4,3,4,5
+  const r = mk(9, { a: [4, 4, 3, 5, 4, 4, 3], b: [4, 4, 3, 5, 4, 4, 3] });
+  r.extras = { 0: { nearest: 'a', longest: 'a' }, 2: { nearest: 'a', eraser: 'b' }, 3: { longest: 'a' }, 6: { nearest: 'a' } };
+  assert.deepEqual([A.playerStats(r, 'a').nearest, A.playerStats(r, 'a').longest], [3, 2], 'no rules: every entry counts, as on rounds made before');
+  r.games = { bonus: { parthree: true, parfive: true } };
+  assert.deepEqual([A.playerStats(r, 'a').nearest, A.playerStats(r, 'a').longest], [2, 1], 'the entries on hole 1 (par 4) are left out');
+  r.games.bonus.eraser = true;
+  assert.deepEqual([A.playerStats(r, 'a').nearest, A.playerStats(r, 'a').longest], [1, 1], 'the nearest on hole 3 was erased by b (par)');
+});
+

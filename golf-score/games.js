@@ -429,7 +429,7 @@
    *   · opt.carry(기본 켬): 바로 앞 번호 홀에서 전원이 같은 타수였던 홀
    * 타수 차는 opt.net이면 핸디 적용 타수로 계산하고, 배판 조건과 니어·버디는 실제 타수로 본다.
    * opt.near(기본 켬) 파3 니어: 니어리스트(round.extras[h].nearest)가 파 이하로 마치면 다른 사람 각각에게서 1타 금액을 더 받는다.
-   *   파를 못 하면 없던 것으로 한다.
+   *   파를 못 하면 없던 것으로 한다. opt.eraser(보너스 설정의 지우개 룰)가 켜져 있고 그 홀의 니어가 지워졌으면(nearInfo) 그것도 없던 것으로 한다.
    * opt.birdie(기본 켬) 버디값: 버디 이하를 한 사람은 다른 사람 각각에게서 1타 금액을 더 받는다.
    * 니어와 버디값도 그 홀이 배판이면 2배다. 전원이 타수를 입력한 홀만 계산한다.
    * opt.order: 홀을 친 순서(홀 인덱스 배열). '앞 홀'은 이 순서에서 바로 앞에 친 홀이다 (10번홀 출발이면 18번홀 다음이 1번홀). 없으면 홀 번호 순
@@ -482,10 +482,12 @@
         }
       }
       // 파3 니어: 파 이하로 마쳐야 받는다
-      var np = nearOn && par === 3 && round.extras && round.extras[h] ? round.extras[h].nearest : null;
+      var ni = nearOn && par === 3 ? nearInfo(round, h, { eraser: opt.eraser }) : null;
+      var np = ni ? ni.raw : null;
       if (np && pids.indexOf(np) >= 0) {
-        var ok = gross(round, np, h) <= par;
+        var ok = !ni.erased && gross(round, np, h) <= par;
         rec.near = { pid: np, ok: ok };
+        if (ni.erased) rec.near.erasedBy = ni.eraser; // 지우개: 다른 사람이 그린 밖에서 파 이하로 마쳐 니어가 지워졌다
         if (ok) pids.forEach(function (pid) { if (pid !== np) pay(pid, np, unit * mult, tag + ' 니어'); });
       }
       // 버디값
@@ -686,29 +688,68 @@
     return res;
   }
 
+  // ───────────────────────── 니어 · 롱기 판정 (홀 제한과 지우개) ─────────────────────────
+  /**
+   * 그 홀의 니어리스트 판정. rules(라운드의 보너스 설정): { parthree: 니어는 파3 홀에서만, eraser: 지우개 룰 }
+   * 지우개: 파3에서 그린에 올리지 못한 사람이 파 이하로 마치면 니어를 지운다(그 홀의 니어가 없어진다).
+   *   누가 지웠는지는 round.extras[h].eraser에 적는다. 지운 사람의 타수가 입력돼 있고 파 이하일 때만 인정하며, 니어를 한 본인은 지울 수 없다.
+   * 반환 { raw: 이 홀에서 니어로 볼 수 있는 입력(없거나 홀 제한에 걸리면 null), pid: 인정된 니어(없으면 null),
+   *        eraser: 지우개로 적힌 사람(없으면 null), erased: 지우개가 인정됐는가,
+   *        why: 지우개가 적혀 있지만 인정되지 않은 이유('noscore' 타수 미입력 | 'over' 파를 못 함), 아니면 null }
+   */
+  function nearInfo(round, h, rules) {
+    rules = rules || {};
+    var ex = (round.extras && round.extras[h]) || {}, par = round.pars[h];
+    var out = { raw: null, pid: null, eraser: null, erased: false, why: null };
+    if (!ex.nearest || !playerById(round, ex.nearest)) return out;
+    if (rules.parthree && par !== 3) return out; // 홀 제한: 파3이 아닌 홀에 남아 있는 니어는 세지 않는다
+    out.raw = out.pid = ex.nearest;
+    if (rules.eraser && par === 3 && ex.eraser && ex.eraser !== ex.nearest && playerById(round, ex.eraser)) {
+      out.eraser = ex.eraser;
+      var g = gross(round, ex.eraser, h);
+      if (g === null) out.why = 'noscore';
+      else if (g > par) out.why = 'over';
+      else { out.erased = true; out.pid = null; }
+    }
+    return out;
+  }
+  /** 그 홀의 롱기스트(없으면 null). rules.parfive: 롱기는 파5 홀에서만 */
+  function longOf(round, h, rules) {
+    var ex = (round.extras && round.extras[h]) || {};
+    if (!ex.longest || !playerById(round, ex.longest)) return null;
+    return rules && rules.parfive && round.pars[h] !== 5 ? null : ex.longest;
+  }
+
   // ───────────────────────── 보너스 (니어/롱기/버디) ─────────────────────────
+  /**
+   * opt.parthree: 니어는 파3 홀에서만, opt.parfive: 롱기는 파5 홀에서만 센다 (다른 홀에 남아 있는 입력은 횟수에도 돈에도 넣지 않는다).
+   * opt.eraser: 지우개 룰 (nearInfo). 지워진 니어는 횟수에도 돈에도 넣지 않고, 지운 사람의 '지우개' 횟수로 센다.
+   */
   function bonuses(round, opt) {
     opt = opt || {};
     var unit = Number(opt.unit) || 0;
     var res = { events: [], transfers: [], counts: {}, unit: unit,
-      enabled: { nearest: !!opt.nearest, longest: !!opt.longest, birdie: !!opt.birdie } };
+      enabled: { nearest: !!opt.nearest, longest: !!opt.longest, birdie: !!opt.birdie },
+      rules: { parthree: !!opt.parthree, parfive: !!opt.parfive, eraser: !!opt.eraser } };
     var pids = round.players.map(function (p) { return p.id; });
-    pids.forEach(function (pid) { res.counts[pid] = { nearest: 0, longest: 0, birdie: 0, eagle: 0 }; });
-    var extras = round.extras || {};
+    pids.forEach(function (pid) { res.counts[pid] = { nearest: 0, longest: 0, birdie: 0, eagle: 0, eraser: 0 }; });
     function pay(to, amount, note) {
       res.transfers = res.transfers.concat(makeTransfers([to], pids.filter(function (p) { return p !== to; }), amount, 'bonus', note));
     }
     for (var h = 0; h < round.holes; h++) {
-      var ex = extras[h] || {};
-      if (ex.nearest && res.counts[ex.nearest]) {
-        res.counts[ex.nearest].nearest++;
-        res.events.push({ hole: h, type: 'nearest', pid: ex.nearest });
-        if (opt.nearest) pay(ex.nearest, unit, (h + 1) + '번홀 니어리스트');
+      var ni = nearInfo(round, h, res.rules), lg = longOf(round, h, res.rules);
+      if (ni.pid) {
+        res.counts[ni.pid].nearest++;
+        res.events.push({ hole: h, type: 'nearest', pid: ni.pid });
+        if (opt.nearest) pay(ni.pid, unit, (h + 1) + '번홀 니어리스트');
+      } else if (ni.erased) {
+        res.counts[ni.eraser].eraser++;
+        res.events.push({ hole: h, type: 'erased', pid: ni.raw, by: ni.eraser });
       }
-      if (ex.longest && res.counts[ex.longest]) {
-        res.counts[ex.longest].longest++;
-        res.events.push({ hole: h, type: 'longest', pid: ex.longest });
-        if (opt.longest) pay(ex.longest, unit, (h + 1) + '번홀 롱기스트');
+      if (lg) {
+        res.counts[lg].longest++;
+        res.events.push({ hole: h, type: 'longest', pid: lg });
+        if (opt.longest) pay(lg, unit, (h + 1) + '번홀 롱기스트');
       }
       pids.forEach(function (pid) {
         var g = gross(round, pid, h);
@@ -806,7 +847,9 @@
     // 스킨스는 playorder 표시가 있는 라운드만 친 순서를 따른다. 이 표시가 없는 라운드(업데이트 전에 만든 기록)는 예전처럼 홀 번호 순이라
     // 이미 정산한 금액이 바뀌지 않는다. 오장은 새로 생긴 게임이라 언제나 친 순서다
     add('skins', skins(round, g.skins && g.skins.playorder ? withOrder(g.skins) : (g.skins || {})), g.skins && g.skins.enabled);
-    add('ojang', ojang(round, withOrder(g.ojang)), g.ojang && g.ojang.enabled);
+    var oj = withOrder(g.ojang);
+    oj.eraser = !!(g.bonus && g.bonus.eraser); // 지우개로 지워진 니어는 오장에서도 없던 것으로 한다
+    add('ojang', ojang(round, oj), g.ojang && g.ojang.enabled);
     add('match', matchPlay(round, g.match || {}), g.match && g.match.enabled);
     if (round.holes === 18) add('nassau', nassau(round, g.nassau || {}), g.nassau && g.nassau.enabled);
     add('bestball', bestBall(round, g.bestball || {}), g.bestball && g.bestball.enabled);
@@ -820,7 +863,7 @@
   }
 
   return {
-    BUILD: 11, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 12, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     defaultStrokeIndex: defaultStrokeIndex,
     defaultPars: defaultPars,
     strokesPerHole: strokesPerHole,
@@ -846,6 +889,8 @@
     bestBall: bestBall,
     vegas: vegas,
     bonuses: bonuses,
+    nearInfo: nearInfo,
+    longOf: longOf,
     settle: settle,
     simplify: simplify,
     computeAll: computeAll

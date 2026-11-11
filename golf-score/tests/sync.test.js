@@ -490,3 +490,39 @@ test('the chosen start hole is shared: it changes the skins carry order, so ever
   res = S.merge(b, { 'start:1': { v: 'in', ts: 9e6, by: 'x' }, starts: { v: 'in', ts: 9e6, by: 'x' } });
   assert.deepEqual(res.changed, []);
 });
+
+test('nearest/longest rules and the eraser are shared: bonus settings and the per-hole eraser key', () => {
+  const r = mkRound();
+  r.games.bonus = Object.assign(r.games.bonus, { parthree: true, parfive: false, eraser: true });
+  assert.equal(S.getKey(r, 'gm:bonus:parthree'), true);
+  assert.equal(S.getKey(r, 'gm:bonus:parfive'), false);
+  assert.equal(S.getKey(r, 'gm:bonus:eraser'), true);
+  assert.equal(S.setKey(r, 'gm:bonus:parfive', true), true); assert.equal(r.games.bonus.parfive, true);
+  assert.equal(S.setKey(r, 'gm:bonus:eraser', 'yes'), false, 'only booleans');
+  // 홀마다 적는 지우개: 플레이어 id, 비우면 지워진다
+  assert.equal(S.setKey(r, 'extra:2:nearest', 'a'), true);
+  assert.equal(S.setKey(r, 'extra:2:eraser', 'b'), true);
+  assert.deepEqual(r.extras[2], { nearest: 'a', eraser: 'b' });
+  assert.equal(S.getKey(r, 'extra:2:eraser'), 'b');
+  assert.equal(S.setKey(r, 'extra:2:eraser', 'nobody'), false, 'unknown player');
+  assert.equal(S.setKey(r, 'extra:9:eraser', 'b'), false, 'hole out of range');
+  assert.equal(S.setKey(r, 'extra:2:erasers', 'b'), false, 'unknown field');
+  S.stamp(r, ['extra:2:nearest', 'extra:2:eraser', 'gm:bonus:parthree', 'gm:bonus:parfive', 'gm:bonus:eraser'], S.createClock(() => 2000), 'me');
+  const keys = S.exportKeys(r);
+  assert.equal(keys['extra:2:eraser'].v, 'b');
+  assert.ok(!('extra:3:eraser' in keys));
+  // 다른 기기로: 값이 그대로 가고, 지우면 지운 것도 간다
+  const other = mkRound();
+  assert.deepEqual(S.merge(other, keys).changed.filter((k) => /^extra:/.test(k)).sort(), ['extra:2:eraser', 'extra:2:nearest']);
+  assert.deepEqual(other.extras[2], { nearest: 'a', eraser: 'b' });
+  assert.equal(other.games.bonus.eraser, true); assert.equal(other.games.bonus.parthree, true);
+  assert.equal(S.setKey(r, 'extra:2:eraser', null), true);
+  assert.deepEqual(r.extras[2], { nearest: 'a', eraser: null });
+  S.stamp(r, ['extra:2:eraser'], S.createClock(() => 3000), 'me');
+  assert.deepEqual(S.merge(other, S.exportKeys(r)).changed, ['extra:2:eraser']);
+  assert.equal(other.extras[2].eraser, null);
+  // 니어까지 지우면 그 홀의 기록이 없어진다
+  assert.equal(S.setKey(r, 'extra:2:nearest', null), true);
+  assert.equal(r.extras[2], undefined);
+});
+

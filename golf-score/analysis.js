@@ -144,8 +144,9 @@
       b.label = ord.startBack ? '후반 (1~9번)' : '후반 (10~18번)';
       st.nines = [a, b];
     }
-    var ex = round.extras || {};
-    Object.keys(ex).forEach(function (h) { if (ex[h]) { if (ex[h].nearest === pid) st.nearest++; if (ex[h].longest === pid) st.longest++; } });
+    // 니어·롱기 횟수는 보너스 설정의 홀 제한(니어는 파3, 롱기는 파5)과 지우개 룰을 따른다 (보너스 탭의 횟수와 같다)
+    var rules = (round.games && round.games.bonus) || {};
+    for (var xh = 0; xh < round.holes; xh++) { if (G.nearInfo(round, xh, rules).pid === pid) st.nearest++; if (G.longOf(round, xh, rules) === pid) st.longest++; }
     return st;
   }
 
@@ -261,7 +262,7 @@
     if (!over && prev && prev.diff >= 2 && last.diff <= 0) cheer(95, (prev.h + 1) + '번홀 실수 뒤에 바로 ' + G.toParLabel(last.diff) + '로 만회했어요. 멘탈이 좋아요!');
     if (!over && st.streakNow >= 3) cheer(90, '최근 ' + st.streakNow + '홀 연속 파 이하! 흐름이 아주 좋아요.');
     else if (!over && st.streakNow === 2) cheer(60, '두 홀 연속 파 이하, 감이 올라오고 있어요.');
-    if (!over && round.extras && round.extras[last.h] && round.extras[last.h].nearest === pid) cheer(85, no + '번홀 니어리스트! 아이언 샷이 날카로워요.');
+    if (!over && G.nearInfo(round, last.h, (round.games && round.games.bonus) || {}).pid === pid) cheer(85, no + '번홀 니어리스트! 아이언 샷이 날카로워요.');
     if (me && status.active >= 2 && st.played >= 3) {
       if (fin) { // 최종 순위는 모두 같은 홀을 입력했을 때만 말한다 (9홀만 입력된 사람이 1위가 되지 않게)
         if (status.even && me.rank === 1) cheer(me.tied ? 75 : 80, me.tied ? '공동 1위로 마쳤어요. 멋진 라운드였어요!' : '오늘의 1위! 축하해요 🏆');
@@ -495,7 +496,7 @@
   }
 
   return {
-    BUILD: 11, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 12, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     OB_COST: OB_COST, HZ_COST: HZ_COST, HAZ: HAZ, HAZ_LABELS: HAZ_LABELS, SHAPE_LABELS: SHAPE_LABELS, setShapeSource: setShapeSource, setInfoFallback: setInfoFallback,
     HAZ_GROUPS: HAZ_GROUPS, hazLabels: hazLabels, MEMO_SEP: MEMO_SEP, memoWords: memoWords, setMemoUpgrades: setMemoUpgrades,
     stat: stat, playOrder: playOrder, playerStats: playerStats, roundStatus: roundStatus, coach: coach, teeMissSide: teeMissSide,

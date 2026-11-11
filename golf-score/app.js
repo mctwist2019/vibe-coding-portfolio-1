@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 11;
+  var BUILD = 12;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -80,20 +80,35 @@
       nassau: { enabled: false, net: false, mode: 'individual', unit: 5000 },
       bestball: { enabled: false, net: false, count: 1, unit: 1000 },
       vegas: { enabled: false, net: false, unit: 100 },
-      bonus: { nearest: false, longest: false, birdie: false, unit: 1000 }
+      // parthree(니어는 파3 홀에서만) · parfive(롱기는 파5 홀에서만) · eraser(지우개 룰)도 여기서는 꺼 둔다: 예전에 만든 라운드의 횟수와 돈이 바뀌면 안 된다.
+      // 새 라운드는 newDraft에서 켠 채로 시작한다 (useNewBonusDefaults)
+      bonus: { nearest: false, longest: false, birdie: false, unit: 1000, parthree: false, parfive: false, eraser: false }
     };
   }
   function fillGames(g) { var d = defaultGames(); Object.keys(d).forEach(function (k) { g[k] = Object.assign(d[k], g[k] || {}); }); return g; }
   function newPlayer() { return { id: uid(), name: '', hcp: 0, team: '' }; }
   function newDraft() {
-    var g = defaultGames();
-    useNewSkinsDefaults(g);
+    var g = upgradeDefaults(defaultGames(), 0);
     return { name: '', course: '', date: today(), holes: 18, players: [newPlayer(), newPlayer(), newPlayer(), newPlayer()], games: g };
   }
   /** 새 라운드의 스킨스: 공금 방식 + OECD 룰 + 공금을 미리 걷음 + 이월은 친 순서로 (스킨스 정산을 켜야 실제로 반영된다) */
   function useNewSkinsDefaults(g) { g.skins.fund = true; g.skins.oecd = true; g.skins.collect = true; g.skins.playorder = true; return g; }
-  /** 이 버전에서 만든 라운드의 게임 설정인가 (예전 버전에는 공금 방식이 없었다) */
+  /** 공금 방식이 생긴 버전(11) 이후에 만든 라운드의 게임 설정인가 */
   function madeHere(g) { return !!(g && g.skins && g.skins.playorder); }
+  /** 새 라운드의 니어·롱기: 니어는 파3 홀에서만, 롱기는 파5 홀에서만 고르고, 파3의 지우개 룰을 쓴다 */
+  function useNewBonusDefaults(g) { g.bonus.parthree = true; g.bonus.parfive = true; g.bonus.eraser = true; return g; }
+  /** 이 게임 설정을 만든 앱 버전. games.made에 적어 둔다(기기에만 남고 공유되지 않는다). 없으면 공금 방식 표시로 11과 그 이전을 가른다 */
+  function madeBy(g) { return g && typeof g.made === 'number' ? g.made : madeHere(g) ? 11 : 10; }
+  /**
+   * 예전 버전(from)에서 만든 게임 설정으로 새 라운드를 시작할 때: 그 뒤에 생긴 기본값을 준다 (11: 스킨스 공금 방식, 12: 니어·롱기 홀 제한과 지우개).
+   * 이 버전에서 만든 설정을 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다
+   */
+  function upgradeDefaults(g, from) {
+    if (from < 11) useNewSkinsDefaults(g);
+    if (from < 12) useNewBonusDefaults(g);
+    g.made = BUILD;
+    return g;
+  }
   /** 모든 게임 계산. 홀을 친 순서(10번홀 출발 등)를 넘겨 스킨스 이월·OECD 가입·오장의 '앞 홀'이 실제 순서를 따르게 한다 (스킨스는 이 버전에서 만든 라운드만) */
   function computeAll(r) { return G.computeAll(r, { order: A.playOrder(r).order }); }
   /** 송금 정리에 나오는 이름: 가상 계정은 '캐디'·'공금' */
@@ -113,7 +128,10 @@
     if (s.round) { fillGames(s.round.games = s.round.games || {}); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); delete s.round.courseFrom; }
     // 예전 버전이 저장해 둔 새 라운드 초안과 지난 라운드에는 그 뒤에 생긴 게임 설정(오장 등)이 없다. 빠진 채로 화면을 그리면 오류가 나므로 채워 둔다
     // 예전 버전에서 쓰다 만 초안은 새 라운드와 같은 스킨스 기본값(공금 방식 등)으로 맞춘다. 지난 라운드와 진행 중인 라운드는 돈 계산이 바뀌면 안 되므로 그대로 둔다
-    if (s.draft && typeof s.draft === 'object') { var oldDraft = !(s.draft.games && s.draft.games.skins && s.draft.games.skins.playorder !== undefined); fillGames(s.draft.games = s.draft.games || {}); if (oldDraft) useNewSkinsDefaults(s.draft.games); }
+    if (s.draft && typeof s.draft === 'object') {
+      var dg = s.draft.games, dfrom = !(dg && dg.skins && dg.skins.playorder !== undefined) ? 10 : typeof dg.made === 'number' ? dg.made : 11;
+      upgradeDefaults(fillGames(s.draft.games = dg || {}), dfrom);
+    }
     s.history.forEach(function (hr) { if (hr && typeof hr === 'object') fillGames(hr.games = hr.games || {}); });
     s.joining = null;
     s.mapZoom = null;
@@ -412,6 +430,9 @@
     var r = S.roundFromSnapshot(keys, DEFAULTS);
     if (!r) return;
     fillGames(r.games);
+    // 설정을 만든 버전 표시(games.made)는 공유되지 않는다. 호스트가 보낸 설정에 니어·롱기 룰이 들어 있으면 그 룰이 생긴 버전(12)에서 만든 것으로 적어 둔다:
+    // 이 라운드의 설정을 베껴 새 라운드를 만들 때 호스트가 꺼 둔 룰을 다시 켜지 않는다 (upgradeDefaults)
+    if (keys['gm:bonus:parthree']) r.games.made = 12;
     var idx = scan ? scan.idx : 0;
     clearScan();
     r.share = { code: code, host: r.share && r.share.host, active: true, broker: idx };
@@ -1241,10 +1262,17 @@
     html += gameCard('라스베가스 (2:2)', '팀 두 명 점수를 낮은수·높은수 순으로 붙여 두 자리 수 비교(4·5 → 45). 상대팀 버디면 뒤집힘(54). 점수 차 × 단가', P + 'vegas.enabled', g.vegas.enabled,
       toggle(P + 'vegas.net', g.vegas.net, '네트') + '<span class="lab">점당</span>' + numField(P + 'vegas.unit', g.vegas.unit, '원', 100, !g.vegas.enabled));
     html += '<div class="card"><h2>보너스 <span class="hint">횟수는 항상 집계</span></h2><div class="stack">' +
-      toggle(P + 'bonus.nearest', g.bonus.nearest, '니어리스트 (파3) 정산 포함') +
+      toggle(P + 'bonus.nearest', g.bonus.nearest, '니어리스트 정산 포함') +
       toggle(P + 'bonus.longest', g.bonus.longest, '롱기스트 정산 포함') +
       toggle(P + 'bonus.birdie', g.bonus.birdie, '버디 보너스 정산 포함 (이글은 2배)') +
-      '</div><div class="opts"><span class="lab">1회당 (다른 플레이어 각각 지급)</span>' + numField(P + 'bonus.unit', g.bonus.unit, '원') + '</div></div>';
+      '</div><div class="opts"><span class="lab">1회당 (다른 플레이어 각각 지급)</span>' + numField(P + 'bonus.unit', g.bonus.unit, '원') + '</div>' +
+      // 니어·롱기를 고를 수 있는 홀과 지우개 룰. 횟수 집계, 보너스 정산, 오장의 니어에 똑같이 적용된다 (games.js의 nearInfo · longOf)
+      '<h2 style="margin-top:14px">니어 · 롱기 룰</h2><div class="stack">' +
+      toggle(P + 'bonus.parthree', g.bonus.parthree, '니어는 파3 홀에서만') +
+      toggle(P + 'bonus.parfive', g.bonus.parfive, '롱기는 파5 홀에서만') +
+      toggle(P + 'bonus.eraser', g.bonus.eraser, '지우개 <span class="muted small" style="font-weight:500">파3에서 니어를 지움</span>') +
+      '</div><div class="muted small" style="margin-top:8px">켜 두면 스코어 입력 화면에서 니어는 파3 홀, 롱기는 파5 홀에서만 고를 수 있어요. ' +
+      '<b>지우개</b>: 파3에서 그린에 올리지 못한 사람이 파 이하로 마치면 그 홀의 니어를 지워요(니어 없음). 니어를 고르면 그 아래에 지운 사람을 고르는 줄이 나옵니다. 지워진 니어는 오장에서도 없던 것으로 해요.</div></div>';
     return html;
   }
 
@@ -1398,15 +1426,7 @@
     html += '</div>';
     html += courseBlock(r, h, par);
     html += '<div data-region="coach" style="display:contents">' + coachCard(r) + '</div>';
-    var ex = (r.extras && r.extras[h]) || {};
-    html += '<div class="card" data-region="extras"><h2>니어 / 롱기 <span class="hint">받는 사람 선택 (선택)</span></h2><div class="stack">' +
-      '<div class="chips"><span class="small muted blab">니어리스트</span>' + r.players.map(function (p) {
-        return '<button class="chip accent ' + (ex.nearest === p.id ? 'active' : '') + '" data-action="extra" data-type="nearest" data-pid="' + esc(p.id) + '">' + esc(p.name) + '</button>';
-      }).join('') + '</div>' +
-      '<div class="chips"><span class="small muted blab">롱기스트</span>' + r.players.map(function (p) {
-        return '<button class="chip accent ' + (ex.longest === p.id ? 'active' : '') + '" data-action="extra" data-type="longest" data-pid="' + esc(p.id) + '">' + esc(p.name) + '</button>';
-      }).join('') + '</div>' +
-      '</div></div>';
+    html += '<div data-region="extras" style="display:contents">' + extrasCard(r, h, par) + '</div>';
     html += '<div data-region="summary" style="display:contents">' + liveSummary(r) + '</div>';
     html += '<div class="navbtns" data-region="nav"><button class="btn" data-action="hole" data-i="' + (h - 1) + '" ' + (h === 0 ? 'disabled' : '') + '>‹ 이전 홀</button>' +
       (h === r.holes - 1 ? '<button class="btn primary" data-action="finish">라운드 종료 🏁</button>'
@@ -1671,7 +1691,7 @@
       if (!h.played) return;
       var bits = [];
       if (h.mult === 2) bits.push('<b>배판</b> ' + h.reasons.join(' · '));
-      if (h.near) bits.push('니어 ' + esc(nameOf(r, h.near.pid)) + (h.near.ok ? ' +1타' : ' (파를 못 해 없던 것으로)'));
+      if (h.near) bits.push('니어 ' + esc(nameOf(r, h.near.pid)) + (h.near.ok ? ' +1타' : h.near.erasedBy ? ' (' + esc(nameOf(r, h.near.erasedBy)) + '의 지우개로 없던 것으로)' : ' (파를 못 해 없던 것으로)'));
       if (h.birdies) bits.push('버디값 ' + h.birdies.map(function (pid) { return esc(nameOf(r, pid)); }).join(', '));
       if (bits.length) notes.push('<div class="kv"><span class="k">' + (h.hole + 1) + '번홀</span><span>' + bits.join(' / ') + '</span></div>');
     });
@@ -1747,6 +1767,36 @@
     return html;
   }
 
+  /**
+   * 스코어 입력 화면의 니어 / 롱기 카드. 보너스 설정에 따라 니어는 파3 홀, 롱기는 파5 홀에서만 나온다(둘 다 해당 없으면 카드가 없다).
+   * 지우개 룰이 켜져 있으면 파3에서 니어를 고른 뒤 그 아래에 지운 사람을 고르는 줄이 나온다
+   */
+  function extrasCard(r, h, par) {
+    var ex = (r.extras && r.extras[h]) || {}, bn = r.games.bonus;
+    var showNear = !bn.parthree || par === 3, showLong = !bn.parfive || par === 5;
+    if (!showNear && !showLong) return '';
+    var ni = G.nearInfo(r, h, bn);
+    var chips = function (type, list, cur) {
+      return list.map(function (p) {
+        return '<button class="chip accent ' + (cur === p.id ? 'active' : '') + (type === 'nearest' && ni.erased && cur === p.id ? ' erased' : '') + '" data-action="extra" data-type="' + type + '" data-pid="' + esc(p.id) + '">' + esc(p.name) + '</button>';
+      }).join('');
+    };
+    var html = '<div class="card"><h2>' + (showNear && showLong ? '니어 / 롱기' : showNear ? '니어리스트' : '롱기스트') + ' <span class="hint">받는 사람 선택 (선택)</span></h2><div class="stack">';
+    if (showNear) html += '<div class="chips"><span class="small muted blab">니어리스트</span>' + chips('nearest', r.players, ex.nearest) + '</div>';
+    if (showNear && bn.eraser && par === 3 && ex.nearest && G.playerById(r, ex.nearest)) {
+      var others = r.players.filter(function (p) { return p.id !== ex.nearest; });
+      var who = ni.eraser ? esc(nameOf(r, ni.eraser)) : '', near = esc(nameOf(r, ex.nearest));
+      html += '<div class="chips"><span class="small muted blab">지우개</span>' + chips('eraser', others, ex.eraser) + '</div>' +
+        '<div class="muted small" data-eraser="' + (ni.erased ? 'on' : ni.eraser ? 'pending' : 'none') + '">' +
+        (ni.erased ? '<b>' + who + '</b>의 지우개로 이 홀의 니어(' + near + ')는 없어요.'
+          : ni.why === 'noscore' ? who + '의 타수를 입력하면 지우개가 정해져요 (파 이하일 때 인정).'
+            : ni.why === 'over' ? who + '가 파를 못 해서 지우개가 인정되지 않아요. 니어는 ' + near + ' 그대로예요.'
+              : '지우개: 그린에 올리지 못한 사람이 파 이하로 마쳤으면 그 사람을 고르세요. 이 홀의 니어가 지워져요.') + '</div>';
+    }
+    if (showLong) html += '<div class="chips"><span class="small muted blab">롱기스트</span>' + chips('longest', r.players, ex.longest) + '</div>';
+    return html + '</div></div>';
+  }
+
   function tabBonus(r, all) {
     var res = all.bonus, g = r.games.bonus, en = res.enabled, me = myPid();
     var money = {};
@@ -1758,13 +1808,23 @@
     };
     var html = '<div class="card"><h2>보너스 <span class="hint">1회당 ' + won(g.unit) + '</span></h2>' +
       '<div class="chips" style="margin-bottom:10px">' + chip('nearest', '니어리스트') + chip('longest', '롱기스트') + chip('birdie', '버디/이글') + '</div>' +
-      '<table><thead><tr><th class="l">플레이어</th><th>니어</th><th>롱기</th><th>버디</th><th>이글+</th>' + (anyMoney ? '<th>금액</th>' : '') + '</tr></thead><tbody>';
+      '<table class="bonus"><thead><tr><th class="l">플레이어</th><th>니어</th><th>롱기</th><th>버디</th><th>이글+</th>' + (anyMoney ? '<th>금액</th>' : '') + '</tr></thead><tbody>';
     r.players.forEach(function (p) {
       var c = res.counts[p.id], m = money[p.id] || 0;
       html += '<tr class="' + (me === p.id ? 'me' : '') + '"><td class="l">' + badge(p.team) + ' ' + esc(p.name) + '</td><td>' + c.nearest + '</td><td>' + c.longest + '</td><td>' + c.birdie + '</td><td>' + c.eagle + '</td>' +
         (anyMoney ? '<td class="' + (m > 0 ? 'pos' : m < 0 ? 'neg' : '') + '">' + signedWon(m) + '</td>' : '') + '</tr>';
     });
-    html += '</tbody></table><div class="muted small" style="margin-top:6px">칩을 눌러 정산에 포함할 보너스를 고르세요. 니어/롱기 받는 사람은 스코어 입력 화면에서 홀마다 선택해요.</div></div>';
+    // 지우개로 지워진 니어: 누가 누구의 니어를 지웠는지 (횟수와 돈에는 들어가지 않는다)
+    var erased = res.events.filter(function (e) { return e.type === 'erased'; });
+    var limits = [];
+    if (res.rules.parthree) limits.push('니어는 파3 홀');
+    if (res.rules.parfive) limits.push('롱기는 파5 홀');
+    html += '</tbody></table>' +
+      (erased.length ? '<div class="stack" style="margin-top:10px">' + erased.map(function (e) {
+        return '<div class="kv"><span class="k">' + (e.hole + 1) + '번홀 지우개</span><span><b>' + esc(nameOf(r, e.by)) + '</b> <span class="muted small">' + esc(nameOf(r, e.pid)) + '의 니어를 지움</span></span></div>';
+      }).join('') + '</div>' : '') +
+      '<div class="muted small" style="margin-top:6px">' + (state.readOnly ? '' : '칩을 눌러 정산에 포함할 보너스를 고르세요. ') + '니어/롱기 받는 사람은 스코어 입력 화면에서 홀마다 선택해요.' +
+      (limits.length ? ' ' + limits.join(', ') + '에서만 세요.' : '') + (res.rules.eraser ? ' 지우개로 지워진 니어는 세지 않아요.' : '') + '</div></div>';
     return html;
   }
 
@@ -2189,10 +2249,9 @@
       state.draft = newDraft();
       if (prev) { // 지난 라운드 플레이어/게임 설정 재사용
         state.draft.players = prev.players.map(function (p) { return { id: uid(), name: p.name, hcp: p.hcp, team: p.team }; });
-        state.draft.games = fillGames(clone(prev.games || {}));
-        // 예전 버전에서 만든 라운드에는 공금 방식이 없었다. 그 설정을 그대로 베끼면 공금 방식이 꺼진 채로 시작하므로 새 기본값을 준다.
-        // 이 버전에서 만든 라운드를 베낄 때는 본인이 고른 값(공금 방식을 끈 것 포함)을 그대로 따른다
-        if (!madeHere(prev.games)) useNewSkinsDefaults(state.draft.games);
+        // 예전 버전에서 만든 라운드에는 그 뒤에 생긴 설정(공금 방식, 니어·롱기 홀 제한과 지우개)이 없었다. 그대로 베끼면 꺼진 채로 시작하므로 새 기본값을 준다.
+        // 이 버전에서 만든 라운드를 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다
+        state.draft.games = upgradeDefaults(fillGames(clone(prev.games || {})), madeBy(prev.games));
         state.draft.games.skins.playorder = true;
         state.draft.holes = prev.holes;
         if (state.draft.holes !== 18) state.draft.games.nassau.enabled = false; // 나소는 18홀 전용
@@ -2395,11 +2454,18 @@
       copyText(text, '분석 요약을 클립보드에 복사했어요');
     },
     extra: function (d) {
-      var r = state.round, h = r.currentHole;
-      if (!G.playerById(r, d.pid) || (d.type !== 'nearest' && d.type !== 'longest')) return;
-      r.extras = r.extras || {}; r.extras[h] = r.extras[h] || {};
-      r.extras[h][d.type] = r.extras[h][d.type] === d.pid ? null : d.pid;
-      if (!r.extras[h].nearest && !r.extras[h].longest) delete r.extras[h];
+      var r = state.round, h = r.currentHole, bn = r.games.bonus, par = r.pars[h];
+      if (!G.playerById(r, d.pid) || ['nearest', 'longest', 'eraser'].indexOf(d.type) < 0) return;
+      // 홀 제한: 니어는 파3, 롱기는 파5 홀에서만 (설정이 켜져 있을 때)
+      if ((d.type === 'nearest' && bn.parthree && par !== 3) || (d.type === 'longest' && bn.parfive && par !== 5)) return;
+      var ex = (r.extras && r.extras[h]) || {};
+      // 지우개: 파3에서 니어를 고른 뒤에, 니어를 한 사람이 아닌 사람만 고를 수 있다
+      if (d.type === 'eraser' && (!bn.eraser || par !== 3 || !ex.nearest || ex.nearest === d.pid)) return;
+      r.extras = r.extras || {}; r.extras[h] = ex;
+      ex[d.type] = ex[d.type] === d.pid ? null : d.pid;
+      // 니어가 없어지거나 지우개로 적힌 사람이 니어가 되면 지우개 표시는 뜻이 없으므로 함께 지운다
+      if (d.type === 'nearest' && ex.eraser && (!ex.nearest || ex.nearest === ex.eraser)) ex.eraser = null;
+      if (!ex.nearest && !ex.longest && !ex.eraser) delete r.extras[h];
       save(); render();
     },
     finish: finishRound,

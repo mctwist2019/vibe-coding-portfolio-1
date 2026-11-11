@@ -601,6 +601,94 @@ test('오장: when everyone ties, the next hole is 배판 (optional)', () => {
   assert.equal(gap.holes[1].played, false);
 });
 
+test('nearest only on par 3 and longest only on par 5: entries on other holes are left out when the rule is on', () => {
+  const players = ['a', 'b', 'c'].map((id) => ({ id, name: id.toUpperCase() }));
+  // 1번홀 파4, 2번홀 파3, 3번홀 파5
+  const r = mkRound(players, { a: [4, 3, 5], b: [4, 3, 5], c: [4, 3, 5] },
+    { holes: 9, pars: [4, 3, 5, 4, 4, 4, 4, 4, 4], extras: { 0: { nearest: 'a', longest: 'b' }, 1: { nearest: 'b', longest: 'c' }, 2: { nearest: 'c', longest: 'a' } } });
+  const cnt = (res, f) => Object.fromEntries(Object.keys(res.counts).map((id) => [id, res.counts[id][f]]));
+  const netOfBonus = (res) => Object.fromEntries(G.settle(res.transfers, r.players).rows.map((x) => [x.id, x.net]));
+  // 규칙이 꺼져 있으면(예전에 만든 라운드) 어느 홀에 적었든 그대로 센다
+  const free = G.bonuses(r, { nearest: true, longest: true, unit: 1000 });
+  assert.deepEqual(cnt(free, 'nearest'), { a: 1, b: 1, c: 1 });
+  assert.deepEqual(cnt(free, 'longest'), { a: 1, b: 1, c: 1 });
+  assert.deepEqual(free.rules, { parthree: false, parfive: false, eraser: false });
+  assert.deepEqual(netOfBonus(free), { a: 0, b: 0, c: 0 });
+  // 켜면 니어는 파3(2번홀), 롱기는 파5(3번홀)만
+  const ruled = G.bonuses(r, { nearest: true, longest: true, unit: 1000, parthree: true, parfive: true });
+  assert.deepEqual(cnt(ruled, 'nearest'), { a: 0, b: 1, c: 0 });
+  assert.deepEqual(cnt(ruled, 'longest'), { a: 1, b: 0, c: 0 });
+  assert.deepEqual(ruled.events.filter((e) => e.type !== 'birdie'), [{ hole: 1, type: 'nearest', pid: 'b' }, { hole: 2, type: 'longest', pid: 'a' }]);
+  assert.deepEqual(netOfBonus(ruled), { a: 1000, b: 1000, c: -2000 });
+  // 하나씩만 켤 수도 있다
+  assert.deepEqual(cnt(G.bonuses(r, { parthree: true }), 'longest'), { a: 1, b: 1, c: 1 });
+  assert.deepEqual(cnt(G.bonuses(r, { parfive: true }), 'nearest'), { a: 1, b: 1, c: 1 });
+  // 판정 함수
+  assert.equal(G.nearInfo(r, 0, { parthree: true }).pid, null);
+  assert.equal(G.nearInfo(r, 0, {}).pid, 'a');
+  assert.equal(G.nearInfo(r, 1, { parthree: true }).pid, 'b');
+  assert.equal(G.longOf(r, 1, { parfive: true }), null);
+  assert.equal(G.longOf(r, 2, { parfive: true }), 'a');
+  assert.equal(G.longOf(r, 5, { parfive: true }), null, 'nothing entered');
+  assert.equal(G.nearInfo(Object.assign({}, r, { extras: { 1: { nearest: 'zz' } } }), 1, {}).pid, null, 'unknown player');
+  // computeAll은 라운드의 보너스 설정을 그대로 쓴다
+  r.games = { bonus: { nearest: true, longest: true, unit: 1000, parthree: true, parfive: true } };
+  assert.deepEqual(Object.fromEntries(G.computeAll(r).settlement.rows.map((x) => [x.id, x.net])), { a: 1000, b: 1000, c: -2000 });
+});
+
+test('eraser: on a par 3 a player who makes par or better erases the nearest; it is neither counted nor paid', () => {
+  const players = ['a', 'b', 'c'].map((id) => ({ id, name: id.toUpperCase() }));
+  // 1~4번홀 파3, 5번홀 파4
+  const r = mkRound(players, { a: [3, 3, 2, 3, 4], b: [3, 4, 3, null, 4], c: [4, 3, 3, 3, 4] }, { holes: 9, pars: [3, 3, 3, 3, 4, 4, 4, 4, 4],
+    extras: { 0: { nearest: 'a', eraser: 'b' }, 1: { nearest: 'a', eraser: 'b' }, 2: { nearest: 'a', eraser: 'c' }, 3: { nearest: 'a', eraser: 'b' }, 4: { nearest: 'a', eraser: 'b' } } });
+  const on = { nearest: true, unit: 1000, eraser: true };
+  assert.deepEqual(G.nearInfo(r, 0, on), { raw: 'a', pid: null, eraser: 'b', erased: true, why: null }, 'b made par: erased');
+  assert.deepEqual(G.nearInfo(r, 1, on), { raw: 'a', pid: 'a', eraser: 'b', erased: false, why: 'over' }, 'b made bogey: not erased');
+  assert.deepEqual(G.nearInfo(r, 2, on), { raw: 'a', pid: null, eraser: 'c', erased: true, why: null }, 'the group decides; a birdie near can be erased by a par if they say so');
+  assert.deepEqual(G.nearInfo(r, 3, on), { raw: 'a', pid: 'a', eraser: 'b', erased: false, why: 'noscore' }, 'no score yet: the near stands for now');
+  assert.deepEqual(G.nearInfo(r, 4, on), { raw: 'a', pid: 'a', eraser: null, erased: false, why: null }, 'not a par 3: no eraser');
+  const res = G.bonuses(r, on);
+  assert.deepEqual(res.counts.a, { nearest: 3, longest: 0, birdie: 1, eagle: 0, eraser: 0 });
+  assert.equal(res.counts.b.eraser, 1); assert.equal(res.counts.c.eraser, 1);
+  assert.deepEqual(res.events.filter((e) => e.type === 'erased'), [{ hole: 0, type: 'erased', pid: 'a', by: 'b' }, { hole: 2, type: 'erased', pid: 'a', by: 'c' }]);
+  assert.deepEqual(Object.fromEntries(G.settle(res.transfers, r.players).rows.map((x) => [x.id, x.net])), { a: 6000, b: -3000, c: -3000 });
+  // 룰이 꺼져 있으면 지우개 표시는 아무 일도 하지 않는다
+  const off = G.bonuses(r, { nearest: true, unit: 1000 });
+  assert.equal(off.counts.a.nearest, 5); assert.equal(off.counts.b.eraser, 0);
+  assert.ok(off.events.every((e) => e.type !== 'erased'));
+  // 니어를 한 본인이나 없는 사람은 지울 수 없다
+  r.extras[0] = { nearest: 'a', eraser: 'a' };
+  assert.equal(G.nearInfo(r, 0, on).pid, 'a');
+  r.extras[0] = { nearest: 'a', eraser: 'zz' };
+  assert.equal(G.nearInfo(r, 0, on).pid, 'a');
+  r.extras[0] = { eraser: 'b' };
+  assert.deepEqual(G.nearInfo(r, 0, on), { raw: null, pid: null, eraser: null, erased: false, why: null }, 'an eraser without a nearest means nothing');
+  // 파3 제한과 함께: 파4에 남은 니어는 빠진다
+  r.extras[0] = { nearest: 'a', eraser: 'b' };
+  assert.equal(G.bonuses(r, { nearest: true, unit: 1000, eraser: true, parthree: true }).counts.a.nearest, 2);
+});
+
+test('오장: a nearest erased by the eraser rule is treated as if it never happened', () => {
+  const pars = [3].concat(Array(17).fill(4));
+  // a 니어 + 파, b가 그린 밖에서 파: 지우개. 타수 차만 남는다 (c만 보기)
+  const r = ojRound({ a: [3], b: [3], c: [4] }, { pars, extras: { 0: { nearest: 'a', eraser: 'b' } } });
+  let res = G.ojang(r, { unit: 5000, eraser: true });
+  assert.deepEqual(res.holes[0].near, { pid: 'a', ok: false, erasedBy: 'b' });
+  assert.deepEqual(amt(res), { a: 5000, b: 5000, c: -10000 });
+  // 지우개 룰이 꺼져 있으면 니어값이 그대로 붙는다
+  res = G.ojang(r, { unit: 5000 });
+  assert.deepEqual(res.holes[0].near, { pid: 'a', ok: true });
+  assert.deepEqual(amt(res), { a: 15000, b: 0, c: -15000 });
+  // computeAll은 보너스 설정의 지우개 룰을 오장에 넘긴다
+  r.games = { ojang: { enabled: true, unit: 5000 }, bonus: { eraser: true } };
+  assert.deepEqual(G.computeAll(r).ojang.holes[0].near, { pid: 'a', ok: false, erasedBy: 'b' });
+  r.games.bonus.eraser = false;
+  assert.deepEqual(G.computeAll(r).ojang.holes[0].near, { pid: 'a', ok: true });
+  // 지운 사람이 보기면 인정되지 않는다
+  const r2 = ojRound({ a: [3], b: [4], c: [4] }, { pars, extras: { 0: { nearest: 'a', eraser: 'b' } } });
+  assert.deepEqual(G.ojang(r2, { unit: 5000, eraser: true }).holes[0].near, { pid: 'a', ok: true });
+});
+
 test('오장: par-3 near pays one stroke only with a par or better; 버디값; 니뻐', () => {
   const pars = [3].concat(Array(17).fill(4));
   // 니어 + 파: 타수 차(1타 × 2명) + 니어(1타 × 2명)

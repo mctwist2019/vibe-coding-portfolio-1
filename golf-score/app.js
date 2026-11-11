@@ -9,6 +9,7 @@
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
   var BUILD = 11;
+  window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
     try { tries = Number(sessionStorage.getItem('gs.mismatch')) || 0; sessionStorage.setItem('gs.mismatch', String(tries + 1)); } catch (e) { tries = 9; }
@@ -1216,8 +1217,9 @@
           '<span class="optnote">각자 낸 돈을 모은 공금에서 시작할 때 플레이어와 캐디에게 나눠 주고, 홀 상금을 승자에게 줘요. ' +
           (sk.oecd ? '공금에서 받은 돈이 낸 돈 이상이 된 사람(OECD 가입)이 <b>OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상</b>을 하면 항목마다 벌금을 공금에 넣어요. 벌금을 내서 받은 돈이 다시 낸 돈 아래로 내려가면, 다시 채울 때까지는 벌금이 없어요. OB·벙커·해저드·퍼트는 📝 상세 기록에 입력한 값으로 판정합니다. ' : '') +
           '끝나면 남은 공금으로 캐디피를 내고, 모자라면 똑같이 나눠 내요. 홀마다 돈을 나눠 주지 않아도 리더보드에 누가 얼마를 가져갔는지 쌓이고, 끝나고 한 번에 나누면 됩니다. ' +
-          (sk.collect && !((Number(sk.stake) || 0) > (Number(sk.start) || 0)) ? '<b>미리 걷음</b>은 각자 내는 돈이 시작 지급보다 많을 때만 적용돼요. 지금은 정산이 누가 누구에게(캐디 포함) 얼마를 보낼지로 나와요.'
-            : sk.collect ? '<b>미리 걷음</b>: 정산은 걷어 둔 돈에서 누구에게 얼마를 줄지로 나와요.' : '<b>안 걷음</b>: 정산은 누가 누구에게(캐디 포함) 얼마를 보낼지로 나와요.') + '</span>'
+          // 이 글은 입력한 금액에 따라 바뀌지 않게 둔다 (금액 칸은 입력할 때 화면을 다시 그리지 않아, 금액을 따지는 글은 옛 내용으로 남는다)
+          (sk.collect ? '<b>미리 걷음</b>: 정산은 걷어 둔 돈에서 누구에게 얼마를 줄지로 나와요. 걷은 돈(각자 내는 돈 × 인원)이 시작할 때 나눠 준 돈보다 많지 않으면 걷지 않은 것으로 정리해요.'
+            : '<b>안 걷음</b>: 정산은 누가 누구에게(캐디 포함) 얼마를 보낼지로 나와요.') + '</span>'
         : '<span class="optbreak"></span><span class="lab">스킨당</span>' + numField(P + 'skins.unit', sk.unit, '원', 100, !sk.enabled) +
           '<span class="optnote">' + (sk.mode === 'team' ? '스킨 하나에 진 팀 각자가 이 금액을 내고 이긴 팀이 나눠 가져요. 공금 방식은 개인전에서만 쓸 수 있어요.' : '스킨 하나에 다른 사람 각각이 이 금액을 줘요.') + '</span>'));
     // 오장: 홀마다 타수 차 × 타당 금액, 조건에 따라 배판. 이름은 기본 금액 5천 원에서 왔고 금액은 바꿀 수 있다
@@ -1604,7 +1606,7 @@
       html += '<h2 style="margin-top:14px">' + (done || over ? '끝나고 나눌 돈' : '지금 끝내면 나눌 돈') + '</h2>';
       if (!(f.total > f.startOut)) {
         // 걷을 돈이 시작 지급보다 많지 않으면 미리 걷어 둘 돈이 없다: 고르는 단추 없이 정산 탭으로 안내한다
-        html += '<div class="muted small">각자 내는 돈이 시작 지급보다 많지 않아 미리 걷어 둘 돈이 없어요. 💰 정산 탭의 송금 정리대로 주고받으면 됩니다.' + caddieNote + '</div>';
+        html += '<div class="muted small">걷을 돈 ' + won(f.total) + '(' + n + '명 × ' + won(f.stake) + ')이 시작 지급 ' + won(f.startOut) + '보다 많지 않아 미리 걷어 둘 돈이 없어요. 💰 정산 탭의 송금 정리대로 주고받으면 됩니다.' + caddieNote + '</div>';
       } else {
         html += '<div class="seg" style="margin-bottom:8px"><button type="button" data-action="fund-collect" data-v="1" class="' + (f.collect ? 'active' : '') + '">공금을 걷었어요</button>' +
           '<button type="button" data-action="fund-collect" data-v="0" class="' + (f.collect ? '' : 'active') + '">안 걷었어요</button></div>';
@@ -1636,10 +1638,15 @@
   function startNote(r, what) {
     if (r.holes !== 18) return '';
     var back = A.playOrder(r).startBack;
-    // 진행 중인 라운드에서 고르면 함께 보는 기기에도 전해진다. 끝난 라운드(기록)는 기기마다 따로 저장되어 있어 고친 기기에서만 바뀐다
-    var live = r === state.round && !state.readOnly && r.status !== 'finished';
+    // 안내는 고른 값이 실제로 전해지는지에 맞춘다:
+    //  진행 중인 라운드 → 함께 보는 기기에 전해진다
+    //  호스트가 끝냈지만 내가 아직 열어 둔 공유 라운드 → 여전히 전송된다(아직 열어 둔 기기와, 종료 직후 잠시 연결을 유지하는 호스트의 기록에 닿는다)
+    //  기록으로 저장된 라운드 → 이 기기에서만 바뀐다
+    var mine = r === state.round && !state.readOnly, live = mine && r.status !== 'finished', stillOpen = mine && !live && sharingActive();
     return '<div class="muted small" data-region="startnote" style="margin-top:8px">' + what + ' <b>' + (back ? '10번홀' : '1번홀') + ' 출발</b> 순서로 계산했어요' + (back ? '(18번홀 다음이 1번홀)' : '') +
-      '. 출발 홀이 다르면 📊 분석 화면의 "출발 홀"에서 고치세요. ' + (live ? '함께 보는 기기에도 똑같이 적용돼요.' : '끝난 라운드에서 고치면 이 기기의 기록만 바뀌어요. 함께 본 기기는 각자 고쳐 주세요.') + '</div>';
+      '. 출발 홀이 다르면 📊 분석 화면의 "출발 홀"에서 고치세요. ' + (live ? '함께 보는 기기에도 똑같이 적용돼요.'
+        : stillOpen ? '이 라운드를 아직 열어 둔 기기에는 똑같이 적용돼요. 이미 기록으로 저장한 기기는 각자 고쳐 주세요.'
+          : '끝난 라운드에서 고치면 이 기기의 기록만 바뀌어요. 함께 본 기기는 각자 고쳐 주세요.') + '</div>';
   }
   /** 오장: 사람별 금액, 홀별 민판·배판, 배판 사유와 니어·버디 내역 */
   function tabOjang(r, all) {
@@ -2375,7 +2382,7 @@
     // 분석 화면
     'an-player': function (d) { state.anPid = d.pid; state.anHole = null; save(); render(); },
     'an-hole': function (d) { var i = Number(d.i); state.anHole = state.anHole === i ? null : i; save(); render(); },
-    'an-start': function (d) { // 출발 홀 직접 지정. 스킨스 이월·오장의 순서가 따라 바뀌므로 진행 중인 라운드에서는 함께 보는 기기에도 전해진다 (sync.js의 'start' 키). 끝난 기록은 이 기기에서만 바뀐다
+    'an-start': function (d) { // 출발 홀 직접 지정. 스킨스 이월·오장의 순서가 따라 바뀌므로 아직 열려 있는 공유 라운드에서는 함께 보는 기기에도 전해진다 (sync.js의 'start' 키). 기록으로 저장된 라운드는 이 기기에서만 바뀐다
       var r = getRound(); if (!r || r.holes !== 18) return;
       if (d.v === 'in') r.startBack = true; else if (d.v === 'out') r.startBack = false; else delete r.startBack;
       state.anHole = null; save(); render();

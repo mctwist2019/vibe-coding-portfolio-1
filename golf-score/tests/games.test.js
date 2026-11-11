@@ -747,4 +747,9 @@ test('all files carry the same build number as the service worker cache', () => 
     assert.ok(!new RegExp('root\\.' + name.slice(0, -1) + '\\s*=').test(src(file)), file + ' does not export the released name');
   });
   assert.ok(src('analysis.js').includes('root.GolfGames2 ||'), 'analysis.js reads GolfGames2');
+  // 예전 app.js와 섞였는지 확인하는 안전장치: 세 파일에 똑같이 있고(하나만 새것일 수 있다), app.js는 자기 버전을 알린다
+  const guard = (f) => { const t = src(f), i = t.indexOf('  // 브라우저 전용 안전장치.'), j = t.indexOf('  root.Golf', i); return i >= 0 && j > i ? t.slice(i, j) : ''; };
+  assert.ok(guard('games.js').includes("root.__gsApp === api.BUILD") && guard('games.js').includes('retry-load'));
+  assert.equal(guard('sync.js'), guard('games.js')); assert.equal(guard('analysis.js'), guard('games.js'));
+  assert.ok(src('app.js').includes('window.__gsApp = BUILD;'), 'app.js announces its build');
 });

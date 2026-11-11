@@ -155,8 +155,10 @@
   var clock = S.createClock();
   clock.observe(state.hlc || 0);
   if (state.round) clock.observe(S.maxRevTs(state.round));
-  // 예전 버전에서 고른 출발 홀에는 변경 표시(rev)가 없어 다른 기기로 가지 않는다. 지금부터는 함께 보는 기기에도 전해지므로 표시를 찍어 둔다
-  if (state.round && typeof state.round.startBack === 'boolean' && !state.round.rev.start) S.stamp(state.round, ['start'], clock, state.clientId);
+  // 예전 버전에서 고른 출발 홀에는 변경 표시(rev)가 없어 다른 기기로 가지 않는다. 지금부터는 함께 보는 기기에도 전해지므로 표시를 찍어 둔다.
+  // 가장 오래된 시각(1)으로 찍는다: 아직 아무도 고르지 않은 기기에는 전해지지만, 이 버전에서 누군가 새로 고른 출발 홀을 덮어쓰지는 않는다
+  var oldStartChoice = false; // 연결되면 한 번 보낸다 (openSession)
+  if (state.round && typeof state.round.startBack === 'boolean' && !state.round.rev.start) { state.round.rev.start = { ts: 1, by: state.clientId }; oldStartChoice = true; }
   var baseline = null, baselineRid = null, saveFailed = false;
   function resetBaseline() { var r = state.round; if (r) { baseline = S.project(r); baselineRid = r.id; } else { baseline = null; baselineRid = null; } }
   /** 저장 직전에 라운드 투영을 비교해 바뀐 키에 rev를 찍고(공유 중이면) 전송 예약 */
@@ -252,6 +254,9 @@
         onConflict: function () { state.syncConflict = true; softRender(); },
         onSkew: function (ms) { skewMs = ms; }
       });
+      // 예전 버전에서 고른 출발 홀(앱을 열 때 변경 표시를 찍은 것)을 한 번 보낸다. 서버에 남은 스냅샷이 내가 올린 것이면 그 에코는 무시되므로,
+      // 스냅샷에 없는 키가 있다는 것을 세션이 스스로 알아채지 못한다
+      if (oldStartChoice && state.round && state.round.share && state.round.share.code === code) { oldStartChoice = false; session.markDirty(['start']); }
       session.start();
     }).catch(function () {
       if (token !== sessionSeq) return;

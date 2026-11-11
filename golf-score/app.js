@@ -1,9 +1,10 @@
 /* app.js — 골프 스코어 앱 UI (vanilla JS, 상태는 localStorage에 저장, 실시간 공유는 sync.js) */
 (function () {
   'use strict';
-  var G = window.GolfGames;
-  var S = window.GolfSync;
-  var A = window.GolfAnalysis;
+  // 이름 끝의 2: 예전 app.js는 이 이름을 모른다. 신호가 나빠 이 파일만 예전 것으로 남고 나머지가 새것이 되어도, 예전 app.js가 '업데이트 중' 안내를 띄운다
+  var G = window.GolfGames2;
+  var S = window.GolfSync2;
+  var A = window.GolfAnalysis2;
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
@@ -154,6 +155,8 @@
   var clock = S.createClock();
   clock.observe(state.hlc || 0);
   if (state.round) clock.observe(S.maxRevTs(state.round));
+  // 예전 버전에서 고른 출발 홀에는 변경 표시(rev)가 없어 다른 기기로 가지 않는다. 지금부터는 함께 보는 기기에도 전해지므로 표시를 찍어 둔다
+  if (state.round && typeof state.round.startBack === 'boolean' && !state.round.rev.start) S.stamp(state.round, ['start'], clock, state.clientId);
   var baseline = null, baselineRid = null, saveFailed = false;
   function resetBaseline() { var r = state.round; if (r) { baseline = S.project(r); baselineRid = r.id; } else { baseline = null; baselineRid = null; } }
   /** 저장 직전에 라운드 투영을 비교해 바뀐 키에 rev를 찍고(공유 중이면) 전송 예약 */
@@ -1208,7 +1211,8 @@
           '<span class="optnote">각자 낸 돈을 모은 공금에서 시작할 때 플레이어와 캐디에게 나눠 주고, 홀 상금을 승자에게 줘요. ' +
           (sk.oecd ? '공금에서 받은 돈이 낸 돈 이상이 된 사람(OECD 가입)이 <b>OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상</b>을 하면 항목마다 벌금을 공금에 넣어요. 벌금을 내서 받은 돈이 다시 낸 돈 아래로 내려가면, 다시 채울 때까지는 벌금이 없어요. OB·벙커·해저드·퍼트는 📝 상세 기록에 입력한 값으로 판정합니다. ' : '') +
           '끝나면 남은 공금으로 캐디피를 내고, 모자라면 똑같이 나눠 내요. 홀마다 돈을 나눠 주지 않아도 리더보드에 누가 얼마를 가져갔는지 쌓이고, 끝나고 한 번에 나누면 됩니다. ' +
-          (sk.collect ? '<b>미리 걷음</b>: 정산은 걷어 둔 돈에서 누구에게 얼마를 줄지로 나와요.' : '<b>안 걷음</b>: 정산은 누가 누구에게(캐디 포함) 얼마를 보낼지로 나와요.') + '</span>'
+          (sk.collect && !((Number(sk.stake) || 0) > (Number(sk.start) || 0)) ? '<b>미리 걷음</b>은 각자 내는 돈이 시작 지급보다 많을 때만 적용돼요. 지금은 정산이 누가 누구에게(캐디 포함) 얼마를 보낼지로 나와요.'
+            : sk.collect ? '<b>미리 걷음</b>: 정산은 걷어 둔 돈에서 누구에게 얼마를 줄지로 나와요.' : '<b>안 걷음</b>: 정산은 누가 누구에게(캐디 포함) 얼마를 보낼지로 나와요.') + '</span>'
         : '<span class="optbreak"></span><span class="lab">스킨당</span>' + numField(P + 'skins.unit', sk.unit, '원', 100, !sk.enabled) +
           '<span class="optnote">' + (sk.mode === 'team' ? '스킨 하나에 진 팀 각자가 이 금액을 내고 이긴 팀이 나눠 가져요. 공금 방식은 개인전에서만 쓸 수 있어요.' : '스킨 하나에 다른 사람 각각이 이 금액을 줘요.') + '</span>'));
     // 오장: 홀마다 타수 차 × 타당 금액, 조건에 따라 배판. 이름은 기본 금액 5천 원에서 왔고 금액은 바꿀 수 있다
@@ -1541,7 +1545,7 @@
     }
     html += '</tbody></table>' + (res.carry ? '<div class="notice" style="margin-top:10px">' + (done || over ? (done ? '마지막 홀까지 이월된 ' : '이월된 채 끝난 ') + res.carry + '스킨' + (f ? '의 상금은 공금에 남아요' : '은 정산에 포함되지 않습니다') : '현재 ' + res.carry + '스킨 이월 중 — 다음 홀 단독 승자가 가져갑니다') + '</div>' : '') +
       (f ? '<div class="muted small" style="margin-top:8px">받은 돈 = 시작 지급 + 상금 − 벌금. 최종 = 받은 돈 − 낸 돈 ' + won(f.stake) + (f.rest >= 0 ? ' + 남는 돈의 1/' + f.players : ' − 모자란 돈의 1/' + f.players) + ' (공금 장부의 ' + (f.rest >= 0 ? '"남는 돈"' : '"모자란 돈"') + ').</div>' : '') + '</div>';
-    if (f) html += fundCard(r, res, done, over);
+    if (f) html += fundCard(r, res, done, over, all.settlement.payments.some(function (p) { return !p.fixed; }));
     html += '<div class="card"><h2>홀별 결과</h2><div class="skinlist">' + res.holes.map(function (h) {
       var cls = h.winner ? 'won' : (h.played && h.tie) ? 'carry' : '';
       return '<div class="' + cls + '">' + (h.hole + 1) + '홀<b>' + (h.winner ? esc(h.winnerName) + ' ' + h.skins : h.played ? '이월' : '-') + '</b>' +
@@ -1559,7 +1563,7 @@
     return html;
   }
   /** 스킨스 공금 장부: 공금이 얼마였고, 누가(플레이어·캐디) 얼마를 가져갔고, 얼마가 남거나 모자라는지 */
-  function fundCard(r, res, done, over) {
+  function fundCard(r, res, done, over, others) {
     var f = res.fund, n = f.players;
     // 1인당 금액: 나누어떨어지지 않으면 '약'을 붙인다 (사람별 정확한 금액은 원 단위로 나눠 표와 송금 정리에 들어간다)
     function per(v) { return (f.even ? '' : '약 ') + won(Math.round(v)); }
@@ -1591,20 +1595,27 @@
       html += '<div class="notice" style="margin-top:12px">' + (state.readOnly ? '이 라운드는 스킨스를 정산에 넣지 않았어요. 위 금액은 참고용입니다.'
         : '지금은 스킨스가 <b>정산 제외</b>라 💰 정산 탭과 결과 복사 글에 공금이 들어가지 않아요. 맨 위 제목 옆의 "정산 제외"를 누르면 "정산 포함"으로 바뀝니다.') + '</div>';
     } else {
-      html += '<h2 style="margin-top:14px">' + (done || over ? '끝나고 나눌 돈' : '지금 끝내면 나눌 돈') + '</h2>' +
-        ('<div class="seg" style="margin-bottom:8px"><button type="button" data-action="fund-collect" data-v="1" class="' + (f.collect ? 'active' : '') + '">공금을 걷었어요</button>' +
-          '<button type="button" data-action="fund-collect" data-v="0" class="' + (f.collect ? '' : 'active') + '">안 걷었어요</button></div>');
-      if (f.collect) {
-        html += '<div class="stack">' + line('걷어 둔 돈', won(f.cash), '공금 ' + won(f.total) + (f.startOut ? ' − 시작 지급 ' + won(f.startOut) : '')) +
-          res.entrants.map(function (e) {
-            var d = Math.round(e.due), note = '상금 ' + won(e.prize) + (e.fines ? ' − 벌금 ' + won(e.fines) : '') + (e.share > 0 ? ' + 남는 돈 ' + won(e.share) : e.share < 0 ? ' − 모자란 돈 ' + won(-e.share) : '');
-            return d >= 0 ? line('→ ' + esc(e.name), won(d), note) : line(esc(e.name), won(-d) + ' 더 내요', note, 'neg');
-          }).join('') +
-          (f.caddieDue ? line('→ 캐디', won(f.caddieDue), '캐디피') : '') + '</div>' +
-          '<div class="muted small" style="margin-top:8px">각자 ' + won(f.stake) + '을 걷고 시작 지급도 이미 준 것으로 보고, 걷어 둔 돈에서 나눠 줄 금액이에요. 다른 게임까지 합친 송금은 💰 정산 탭에 있어요.</div>';
+      var caddieNote = f.caddieDue ? ' 캐디에게 줄 돈 ' + won(f.caddieDue) + '(' + (f.tip && f.caddie ? '시작 지급 + 캐디피' : f.tip ? '시작 지급' : '캐디피') + ')도 거기에 "→ 캐디"로 들어 있어요.' : '';
+      html += '<h2 style="margin-top:14px">' + (done || over ? '끝나고 나눌 돈' : '지금 끝내면 나눌 돈') + '</h2>';
+      if (!(f.total > f.startOut)) {
+        // 걷을 돈이 시작 지급보다 많지 않으면 미리 걷어 둘 돈이 없다: 고르는 단추 없이 정산 탭으로 안내한다
+        html += '<div class="muted small">각자 내는 돈이 시작 지급보다 많지 않아 미리 걷어 둘 돈이 없어요. 💰 정산 탭의 송금 정리대로 주고받으면 됩니다.' + caddieNote + '</div>';
       } else {
-        html += '<div class="muted small">돈을 걷지 않았으면 💰 정산 탭의 송금 정리대로 주고받으면 됩니다.' +
-          (f.caddieDue ? ' 캐디에게 줄 돈 ' + won(f.caddieDue) + '(' + (f.tip && f.caddie ? '시작 지급 + 캐디피' : f.tip ? '시작 지급' : '캐디피') + ')도 거기에 "→ 캐디"로 들어 있어요.' : '') + '</div>';
+        html += '<div class="seg" style="margin-bottom:8px"><button type="button" data-action="fund-collect" data-v="1" class="' + (f.collect ? 'active' : '') + '">공금을 걷었어요</button>' +
+          '<button type="button" data-action="fund-collect" data-v="0" class="' + (f.collect ? '' : 'active') + '">안 걷었어요</button></div>';
+        if (f.collect) {
+          html += '<div class="stack">' + line('걷어 둔 돈', won(f.cash), '공금 ' + won(f.total) + (f.startOut ? ' − 시작 지급 ' + won(f.startOut) : '')) +
+            res.entrants.map(function (e) {
+              var d = Math.round(e.due), note = '상금 ' + won(e.prize) + (e.fines ? ' − 벌금 ' + won(e.fines) : '') + (e.share > 0 ? ' + 남는 돈 ' + won(e.share) : e.share < 0 ? ' − 모자란 돈 ' + won(-e.share) : '');
+              return d >= 0 ? line('→ ' + esc(e.name), won(d), note) : line(esc(e.name), won(-d) + ' 더 내요', note, 'neg');
+            }).join('') +
+            (f.caddieDue ? line('→ 캐디', won(f.caddieDue), '캐디피') : '') + '</div>' +
+            // 정산 탭의 "스킨스 공금" 줄은 이 목록과 언제나 같다 (games.js의 payout). 다른 게임의 돈은 공금과 섞지 않고 따로 정리된다
+            '<div class="muted small" style="margin-top:8px">각자 ' + won(f.stake) + '을 걷고 시작 지급도 이미 준 것으로 보고, 걷어 둔 돈으로 할 일이에요. 💰 정산 탭의 "스킨스 공금" 줄과 같아요.' +
+            (others ? ' 다른 게임의 돈은 정산 탭에 플레이어끼리 주고받는 줄로 따로 나와요.' : '') + '</div>';
+        } else {
+          html += '<div class="muted small">돈을 걷지 않았으면 💰 정산 탭의 송금 정리대로 주고받으면 됩니다.' + caddieNote + '</div>';
+        }
       }
     }
     html += '<div class="muted small" style="margin-top:8px">' +
@@ -1620,8 +1631,10 @@
   function startNote(r, what) {
     if (r.holes !== 18) return '';
     var back = A.playOrder(r).startBack;
+    // 진행 중인 라운드에서 고르면 함께 보는 기기에도 전해진다. 끝난 라운드(기록)는 기기마다 따로 저장되어 있어 고친 기기에서만 바뀐다
+    var live = r === state.round && !state.readOnly && r.status !== 'finished';
     return '<div class="muted small" data-region="startnote" style="margin-top:8px">' + what + ' <b>' + (back ? '10번홀' : '1번홀') + ' 출발</b> 순서로 계산했어요' + (back ? '(18번홀 다음이 1번홀)' : '') +
-      '. 출발 홀이 다르면 📊 분석 화면의 "출발 홀"에서 고치세요. 함께 보는 기기에도 똑같이 적용돼요.</div>';
+      '. 출발 홀이 다르면 📊 분석 화면의 "출발 홀"에서 고치세요. ' + (live ? '함께 보는 기기에도 똑같이 적용돼요.' : '끝난 라운드에서 고치면 이 기기의 기록만 바뀌어요. 함께 본 기기는 각자 고쳐 주세요.') + '</div>';
   }
   /** 오장: 사람별 금액, 홀별 민판·배판, 배판 사유와 니어·버디 내역 */
   function tabOjang(r, all) {
@@ -1756,14 +1769,22 @@
         (parts.length ? '<tr class="sub' + mine + '"><td class="l small muted brk" colspan="2">' + parts.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join(', ') + '</td></tr>' : '');
     });
     html += '</tbody></table></div>';
-    html += '<div class="card"><h2>송금 정리 <span class="hint">최소 횟수로 정산</span></h2>' +
-      (s.payments.length ? s.payments.map(function (p) { return '<div class="payline"><span><b>' + esc(payName(r, p.from)) + '</b> → <b>' + esc(payName(r, p.to)) + '</b></span><span class="amt">' + won(p.amount) + '</span></div>'; }).join('') : '<div class="muted">정산할 금액이 없습니다.' + (included.length ? '' : ' 각 게임 탭의 "정산 포함"을 켜거나 설정에서 금액을 정하세요.') + '</div>') +
+    // 송금 정리. 스킨스 공금을 미리 걷은 라운드는 걷어 둔 돈으로 할 일(장부의 "끝나고 나눌 돈"과 같은 줄)을 먼저 적고, 다른 게임은 플레이어끼리 따로 정리한다
+    var fd = all.skins && all.skins.enabled && all.skins.fund ? all.skins.fund : null;
+    var fundPays = s.payments.filter(function (p) { return p.fixed; }), otherPays = s.payments.filter(function (p) { return !p.fixed; });
+    var payLine = function (p) { return '<div class="payline"><span><b>' + esc(payName(r, p.from)) + '</b> → <b>' + esc(payName(r, p.to)) + '</b></span><span class="amt">' + won(p.amount) + '</span></div>'; };
+    html += '<div class="card"><h2>송금 정리' + (fundPays.length ? '' : ' <span class="hint">최소 횟수로 정산</span>') + '</h2>' +
+      (s.payments.length
+        ? (fundPays.length ? '<div class="paygroup">스킨스 공금 <span class="muted small">걷어 둔 돈 ' + won(fd.cash) + '</span></div>' + fundPays.map(payLine).join('') : '') +
+          (fundPays.length && otherPays.length ? '<div class="paygroup">다른 게임 <span class="muted small">플레이어끼리 · 최소 횟수</span></div>' : '') + otherPays.map(payLine).join('')
+        : '<div class="muted">정산할 금액이 없습니다.' + (included.length ? '' : ' 각 게임 탭의 "정산 포함"을 켜거나 설정에서 금액을 정하세요.') + '</div>') +
       '</div>';
-    if (all.skins && all.skins.enabled && all.skins.fund) {
-      var fd = all.skins.fund;
+    if (fd) {
       html += '<div class="notice">' + (fd.collect
-        ? '스킨스 공금은 <b>미리 걷은 것</b>으로 정리했어요. 각자 ' + won(fd.stake) + '을 냈고 시작 지급도 이미 준 것으로 보고, "공금 →" 줄은 걷어 둔 ' + won(fd.cash) + '에서 나눠 줄 돈입니다. 걷지 않았다면 스킨스 탭 공금 장부에서 "안 걷었어요"를 고르세요.'
-        : '스킨스 공금은 <b>걷지 않은 것</b>으로 정리했어요. 위 송금대로만 주고받으면 ' + (fd.caddieDue ? '되고, 캐디에게 줄 돈 ' + won(fd.caddieDue) + '(' + (fd.tip && fd.caddie ? '시작 지급 + 캐디피' : fd.tip ? '시작 지급' : '캐디피') + ')은 "→ 캐디" 줄에 모입니다.' : '됩니다.') + ' 미리 걷었다면 스킨스 탭 공금 장부에서 "공금을 걷었어요"를 고르세요.') +
+        ? '스킨스 공금은 <b>미리 걷은 것</b>으로 정리했어요. 각자 ' + won(fd.stake) + '을 냈고 시작 지급도 이미 준 것으로 보고, "스킨스 공금" 줄은 걷어 둔 ' + won(fd.cash) + '으로 할 일입니다. 스킨스 탭 공금 장부의 "끝나고 나눌 돈"과 같아요.' +
+          (otherPays.length ? ' 다른 게임의 돈은 공금과 섞지 않고 플레이어끼리 주고받는 줄로 따로 정리했어요.' : '') + ' 걷지 않았다면 스킨스 탭 공금 장부에서 "안 걷었어요"를 고르세요.'
+        : '스킨스 공금은 <b>걷지 않은 것</b>으로 정리했어요. 위 송금대로만 주고받으면 ' + (fd.caddieDue ? '되고, 캐디에게 줄 돈 ' + won(fd.caddieDue) + '(' + (fd.tip && fd.caddie ? '시작 지급 + 캐디피' : fd.tip ? '시작 지급' : '캐디피') + ')은 "→ 캐디" 줄에 모입니다.' : '됩니다.') +
+          (fd.total > fd.startOut ? ' 미리 걷었다면 스킨스 탭 공금 장부에서 "공금을 걷었어요"를 고르세요.' : '')) +
         ' 손익은 낸 돈' + (fd.caddieTotal ? '과 캐디 몫' : '') + '까지 넣은 금액이에요.</div>';
     }
     if (!state.readOnly && holesDone(r) < r.holes) html += '<div class="notice">아직 ' + (r.holes - holesDone(r)) + '홀이 남았어요. 매치/나소 금액은 매치가 끝나야 확정됩니다.</div>';
@@ -1912,7 +1933,7 @@
   }
   /** 분석용 경기 현황: 기록(지난 라운드)으로 보는 라운드는 홀이 덜 채워졌어도 끝난 라운드로 본다 (종료를 누르지 않고 보관된 라운드 포함) */
   function analysisStatus(r) { return A.roundStatus(r, { archived: state.readOnly || r !== state.round }); }
-  /** 18홀 출발 홀: 기본은 입력 순서로 추정(자동). 지난 홀을 나중에 몰아서 입력해 순서가 틀리게 잡히면 직접 고를 수 있다 (함께 보는 기기에도 전해진다) */
+  /** 18홀 출발 홀: 기본은 입력 순서로 추정(자동). 지난 홀을 나중에 몰아서 입력해 순서가 틀리게 잡히면 직접 고를 수 있다 (진행 중인 라운드에서는 함께 보는 기기에도 전해진다) */
   function startSeg(r, stt) {
     var cur = r.startBack === true ? 'in' : r.startBack === false ? 'out' : 'auto';
     var opts = [['auto', cur === 'auto' ? '자동 (' + (stt.startBack ? '10번홀' : '1번홀') + ')' : '자동'], ['out', '1번홀'], ['in', '10번홀']];
@@ -2025,7 +2046,6 @@
       lines.push('  공금 ' + won(fd.total) + ' (각자 ' + won(fd.stake) + ')' + (fd.startOut ? ' · 시작 지급 ' + won(fd.startOut) : '') + ' · 홀 상금 ' + won(fd.paid) + (fd.fines ? ' · OECD 벌금 +' + won(fd.fines) : '') +
         (fd.caddie ? ' · 캐디피 ' + won(fd.caddie) : '') + (fd.rest >= 0 ? ' · 남는 돈 ' + won(fd.rest) : ' · 모자란 돈 ' + won(-fd.rest) + ' (1인당 ' + (fd.even ? '' : '약 ') + won(Math.round(-fd.share)) + ')'));
       lines.push('  가져간 돈: ' + all.skins.entrants.map(function (e) { return e.name + ' ' + won(e.take); }).join(', ') + (fd.caddieTotal ? ', 캐디 ' + won(fd.caddieTotal) : ''));
-      if (fd.collect) lines.push('  끝나고 나눌 돈(걷어 둔 ' + won(fd.cash) + '): ' + all.skins.entrants.map(function (e) { var d = Math.round(e.due); return e.name + ' ' + (d >= 0 ? won(d) : won(-d) + ' 더 냄'); }).join(', ') + (fd.caddieDue ? ', 캐디 ' + won(fd.caddieDue) : ''));
     }
     if (all.ojang && all.ojang.enabled && !all.ojang.error) lines.push('', '🧾 오장(타당 ' + won(all.ojang.unit) + '): ' + all.ojang.rows.map(function (x) { return x.name + ' ' + signedWon(x.amount); }).join(', '));
     if (all.match && !all.match.error) { lines.push('', '⚔️ 매치:'); all.match.matches.forEach(function (m) { lines.push('  ' + m.a.name + ' vs ' + m.b.name + ' — ' + m.status.text + (m.status.leader ? ' (' + (m.status.leader === 'A' ? m.a.name : m.b.name) + ')' : '')); }); }
@@ -2034,8 +2054,17 @@
     if (all.settlement.payments.length) {
       lines.push('', '💰 정산:');
       all.settlement.rows.forEach(function (p) { lines.push('  ' + p.name + ' ' + signedWon(p.net)); });
-      lines.push('  송금:');
-      all.settlement.payments.forEach(function (p) { lines.push('  ' + payName(r, p.from) + ' → ' + payName(r, p.to) + ' ' + won(p.amount)); });
+      // 미리 걷은 스킨스 공금은 걷어 둔 돈으로 할 일(장부의 "끝나고 나눌 돈")을 따로 묶어 적는다. 같은 돈을 두 번 적지 않는다
+      var fixedPays = all.settlement.payments.filter(function (p) { return p.fixed; }), freePays = all.settlement.payments.filter(function (p) { return !p.fixed; });
+      var payText = function (p) { lines.push('  ' + payName(r, p.from) + ' → ' + payName(r, p.to) + ' ' + won(p.amount)); };
+      if (fixedPays.length) {
+        lines.push('  스킨스 공금 (걷어 둔 돈 ' + won(all.skins.fund.cash) + '):');
+        fixedPays.forEach(payText);
+        if (freePays.length) { lines.push('  다른 게임 (플레이어끼리):'); freePays.forEach(payText); }
+      } else {
+        lines.push('  송금:');
+        freePays.forEach(payText);
+      }
     }
     return lines.join('\n');
   }
@@ -2341,7 +2370,7 @@
     // 분석 화면
     'an-player': function (d) { state.anPid = d.pid; state.anHole = null; save(); render(); },
     'an-hole': function (d) { var i = Number(d.i); state.anHole = state.anHole === i ? null : i; save(); render(); },
-    'an-start': function (d) { // 출발 홀 직접 지정. 스킨스 이월·오장의 순서가 따라 바뀌므로 함께 보는 기기에도 전해진다 (sync.js의 'start' 키)
+    'an-start': function (d) { // 출발 홀 직접 지정. 스킨스 이월·오장의 순서가 따라 바뀌므로 진행 중인 라운드에서는 함께 보는 기기에도 전해진다 (sync.js의 'start' 키). 끝난 기록은 이 기기에서만 바뀐다
       var r = getRound(); if (!r || r.holes !== 18) return;
       if (d.v === 'in') r.startBack = true; else if (d.v === 'out') r.startBack = false; else delete r.startBack;
       state.anHole = null; save(); render();

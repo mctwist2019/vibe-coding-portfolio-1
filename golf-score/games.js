@@ -1,10 +1,10 @@
 /*
  * games.js — 골프 스코어 / 내기 게임 계산 로직 (순수 함수)
- * 브라우저(window.GolfGames)와 Node(require) 양쪽에서 사용 가능.
+ * 브라우저(window.GolfGames2)와 Node(require) 양쪽에서 사용 가능.
  */
 (function (root, factory) {
   var api = factory();
-  root.GolfGames = api;
+  root.GolfGames2 = api; // 이름의 2: 예전 app.js(이 이름을 모른다)가 새 파일과 섞여 실행되면 '업데이트 중' 안내를 띄우게 한다
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
@@ -295,7 +295,9 @@
     var stake = wonAmount(opt.stake), prize = wonAmount(opt.prize), caddie = wonAmount(opt.caddie), fine = wonAmount(opt.fine);
     var start = wonAmount(opt.start), tip = wonAmount(opt.tip);
     var oecd = fundOn && !!opt.oecd;
-    var collect = fundOn && !!opt.collect; // 공금을 실제로 걷고 시작 지급도 이미 한 경우: 남은 송금은 걷어 둔 돈에서 나눠 주는 것이 된다
+    // 공금을 실제로 걷고 시작 지급도 이미 한 경우: 남은 송금은 걷어 둔 돈에서 나눠 주는 것이 된다.
+    // 걷은 돈이 시작 지급보다 많을 때만 뜻이 있다. 각자 내는 돈이 0이거나 시작 지급보다 적으면 걷어 둔 돈이 없으므로 '안 걷음'으로 계산한다
+    var collect = fundOn && !!opt.collect && stake * ents.length > start * ents.length + tip;
     var order = holeOrder(round, opt.order);
     var res = { entrants: [], holes: [], carry: 0, transfers: [], error: null, fund: null };
     if (ents.length < 2) { res.error = opt.mode === 'team' ? '팀이 2개 이상 필요합니다' : '플레이어가 2명 이상 필요합니다'; return res; }
@@ -379,14 +381,16 @@
       else if (e.final < 0) res.transfers.push({ from: e.pids[0], to: '#pot', amount: -e.final, game: 'skins', note: '스킨스 공금 정산' });
     });
     if (tip + caddie > 0) res.transfers.push({ from: '#pot', to: '#caddie', amount: tip + caddie, game: 'skins', note: '캐디 (시작 지급 + 캐디피)' });
-    // 이미 오간 돈 (미리 걷은 경우): 손익은 그대로 두고, 송금 정리에서만 뺀다
+    // 미리 걷은 경우: 끝나고 걷어 둔 돈(봉투)으로 할 일을 장부의 "끝나고 나눌 돈" 순서 그대로 적는다 (받을 사람, 더 낼 사람, 캐디피).
+    // 정산의 송금 정리가 이 줄들을 그대로 쓰므로 장부와 정산이 언제나 같고, 캐디피는 언제나 공금에서 나간다. 손익은 그대로다
     if (collect) {
-      res.done = [];
+      res.payout = [];
       res.entrants.forEach(function (e) {
-        if (stake > 0) res.done.push({ from: e.pids[0], to: '#pot', amount: stake });
-        if (start > 0) res.done.push({ from: '#pot', to: e.pids[0], amount: start });
+        var d = Math.round(e.due);
+        if (d > 0) res.payout.push({ from: '#pot', to: e.pids[0], amount: d });
+        else if (d < 0) res.payout.push({ from: e.pids[0], to: '#pot', amount: -d });
       });
-      if (tip > 0) res.done.push({ from: '#pot', to: '#caddie', amount: tip });
+      if (caddie > 0) res.payout.push({ from: '#pot', to: '#caddie', amount: caddie });
     }
     return res;
   }
@@ -704,13 +708,16 @@
    * 송금 목록 → 사람별 손익과 최소 송금 정리.
    * '#'으로 시작하는 id는 가상 계정이다('#pot' 스킨스 펀드, '#caddie' 캐디피). 손익 표(rows)에는 넣지 않고,
    * 송금 정리(payments)에는 그대로 나온다 → 캐디피처럼 사람들 밖으로 나가는 돈도 누가 얼마를 낼지 정리된다
+   * fixed: { game, payments } — 이 게임의 돈은 정해진 줄(payments) 그대로 주고받는다 (미리 걷은 스킨스 공금: 걷어 둔 돈에서 나눠 주는 줄).
+   *   그 게임은 최소 송금 계산에서 빼고 나머지 게임만 사람끼리 최소 횟수로 정리해 뒤에 붙인다. 손익(rows)은 모든 게임을 합친 그대로다
    */
-  function settle(transfers, players, done) {
-    var net = {}, paid = {}, received = {}, byGame = {};
-    players.forEach(function (p) { net[p.id] = 0; paid[p.id] = 0; received[p.id] = 0; byGame[p.id] = {}; });
+  function settle(transfers, players, fixed) {
+    var net = {}, paid = {}, received = {}, byGame = {}, bal = {};
+    // bal(최소 송금으로 정리할 잔액)도 net과 같은 순서로 만든다: 금액이 같은 사람끼리의 짝이 플레이어 순서를 따라 예전 기록의 송금 줄이 그대로 나온다
+    players.forEach(function (p) { net[p.id] = 0; paid[p.id] = 0; received[p.id] = 0; byGame[p.id] = {}; bal[p.id] = 0; });
     function pseudo(t) {
       [t.from, t.to].forEach(function (id) {
-        if (typeof id === 'string' && id.charAt(0) === '#' && !(id in net)) { net[id] = 0; paid[id] = 0; received[id] = 0; byGame[id] = {}; }
+        if (typeof id === 'string' && id.charAt(0) === '#' && !(id in net)) { net[id] = 0; paid[id] = 0; received[id] = 0; byGame[id] = {}; bal[id] = 0; }
       });
     }
     transfers.forEach(function (t) {
@@ -720,18 +727,11 @@
       paid[t.from] += t.amount; received[t.to] += t.amount;
       byGame[t.from][t.game] = (byGame[t.from][t.game] || 0) - t.amount;
       byGame[t.to][t.game] = (byGame[t.to][t.game] || 0) + t.amount;
+      // 최소 송금으로 정리할 잔액: 줄이 정해진 게임(fixed)의 돈은 넣지 않는다
+      if (fixed && t.game === fixed.game) return;
+      bal[t.from] -= t.amount; bal[t.to] += t.amount;
     });
-    // 송금 정리는 '아직 오가지 않은 돈'만: 이미 오간 돈(done, 예: 미리 걷은 공금과 시작 지급)을 손익에서 뺀 잔액으로 만든다. 손익(rows)은 그대로다
-    var bal = {};
-    Object.keys(net).forEach(function (id) { bal[id] = net[id]; });
-    (done || []).forEach(function (t) {
-      pseudo(t);
-      if (!(t.from in net) || !(t.to in net)) return;
-      if (!(t.from in bal)) bal[t.from] = net[t.from];
-      if (!(t.to in bal)) bal[t.to] = net[t.to];
-      bal[t.from] += t.amount; bal[t.to] -= t.amount;
-    });
-    var payments = simplify(bal);
+    var payments = (fixed ? fixed.payments.map(function (p) { return { from: p.from, to: p.to, amount: p.amount, fixed: true }; }) : []).concat(simplify(bal));
     var rows = players.map(function (p) {
       return { id: p.id, name: p.name, net: Math.round(net[p.id]), paid: Math.round(paid[p.id]), received: Math.round(received[p.id]), byGame: byGame[p.id] };
     }).sort(function (a, b) { return b.net - a.net; });
@@ -769,12 +769,12 @@
     var g = round.games || {};
     var order = ctx && ctx.order; // 홀을 친 순서 (앱이 analysis.js의 playOrder로 넘겨 준다)
     function withOrder(o) { var c = {}; Object.keys(o || {}).forEach(function (k) { c[k] = o[k]; }); c.order = order; return c; }
-    var out = { transfers: [] }, done = [];
+    var out = { transfers: [] }, fixed = null;
     function add(key, res, included) {
       res.enabled = !!included;
       out[key] = res;
       if (included && res.transfers && !res.error) out.transfers = out.transfers.concat(res.transfers);
-      if (included && res.done && !res.error) done = done.concat(res.done);
+      if (included && res.payout && !res.error) fixed = { game: key, payments: res.payout };
     }
     add('stroke', strokePlay(round, g.stroke || {}), true);
     out.stableford = stableford(round, g.stableford || {});
@@ -790,7 +790,7 @@
     var bonus = bonuses(round, b);
     out.bonus = bonus;
     if (b.nearest || b.longest || b.birdie) out.transfers = out.transfers.concat(bonus.transfers);
-    out.settlement = settle(out.transfers, round.players, done);
+    out.settlement = settle(out.transfers, round.players, fixed);
     return out;
   }
 

@@ -228,6 +228,10 @@ tr.me td { font-weight: 700; }
 .payline { gap: 10px; }
 .payline > span:first-child { min-width: 0; word-break: keep-all; overflow-wrap: anywhere; }
 .payline .amt { font-weight: 800; white-space: nowrap; flex-shrink: 0; }
+/* 송금 정리의 묶음 제목 (스킨스 공금 / 다른 게임) */
+.paygroup { font-size: 13px; font-weight: 800; margin: 12px 0 2px; word-break: keep-all; }
+.paygroup:first-of-type { margin-top: 0; }
+.paygroup + .payline { padding-top: 6px; }
 .histrow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .histrow:last-child { border-bottom: 0; }
 .histrow .t { font-weight: 700; } .histrow .s { font-size: 13px; color: var(--muted); }

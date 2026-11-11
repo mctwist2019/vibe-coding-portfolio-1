@@ -3,12 +3,12 @@
  *   - 플레이어별 통계: 스코어 분포, 파3/4/5 성적, 전·후반, 연속 기록, OB·해저드·퍼트 등 상세 기록
  *   - 경기 현황: 순위, 타수 차, 최근 흐름, 어려웠던 홀
  *   - 코치 한마디: 기록을 규칙으로 해석해 만든 격려와 팁 (서버·AI 호출 없음)
- * 브라우저(window.GolfAnalysis)와 Node(require) 양쪽에서 사용 가능. games.js에 의존.
+ * 브라우저(window.GolfAnalysis2)와 Node(require) 양쪽에서 사용 가능. games.js에 의존.
  */
 (function (root, factory) {
-  var G = root.GolfGames || (typeof require === 'function' ? require('./games.js') : null);
+  var G = root.GolfGames2 || (typeof require === 'function' ? require('./games.js') : null);
   var api = factory(G);
-  root.GolfAnalysis = api;
+  root.GolfAnalysis2 = api; // 이름의 2: games.js의 같은 줄 설명 참고
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : this, function (G) {
   'use strict';

@@ -3,11 +3,11 @@
  *  - 라운드를 필드 단위 key/value 맵으로 투영하고, 키별 last-writer-wins(하이브리드 논리 시계)로 병합
  *  - 방 코드(8자리)에서 PBKDF2로 토픽과 AES-GCM 키를 함께 유도. 공개 MQTT 브로커(WebSocket)로 전송 (mqtt.js 필요)
  *  - 브로커는 방 단위로 고정(자동 전환 없음). 늦게 참여한 기기는 retained 스냅샷 또는 hello 요청 응답으로 상태를 받음
- * 브라우저(window.GolfSync)와 Node(require) 양쪽에서 사용 가능. 순수 로직은 Node 테스트로 검증.
+ * 브라우저(window.GolfSync2)와 Node(require) 양쪽에서 사용 가능. 순수 로직은 Node 테스트로 검증.
  */
 (function (root, factory) {
   var api = factory();
-  root.GolfSync = api;
+  root.GolfSync2 = api; // 이름의 2: games.js의 같은 줄 설명 참고
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';

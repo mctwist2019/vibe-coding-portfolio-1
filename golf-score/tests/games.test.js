@@ -343,9 +343,12 @@ test('skins fund collected up front: profit and loss stay the same, the payments
   assert.deepEqual([on.skins.fund.collect, on.skins.fund.cash, on.skins.fund.caddieDue], [true, 350000, 150000]);
   assert.deepEqual(Object.fromEntries(on.skins.entrants.map((e) => [e.id, e.due])), { a: 105000, b: 45000, c: 25000, d: 25000 });
   assert.deepEqual(Object.fromEntries(off.skins.entrants.map((e) => [e.id, e.due])), finalOf(off.skins), 'not collected: what is due is the profit or loss itself');
-  assert.deepEqual([off.skins.fund.collect, off.skins.fund.cash, off.skins.fund.caddieDue, off.skins.done], [false, 0, 160000, undefined]);
+  assert.deepEqual([off.skins.fund.collect, off.skins.fund.cash, off.skins.fund.caddieDue, off.skins.payout], [false, 0, 160000, undefined]);
   const pay = Object.fromEntries(on.settlement.payments.map((p) => [p.from + '>' + p.to, p.amount]));
   assert.deepEqual(pay, { '#pot>#caddie': 150000, '#pot>a': 105000, '#pot>b': 45000, '#pot>c': 25000, '#pot>d': 25000 });
+  // 송금 줄은 장부의 "끝나고 나눌 돈"과 같은 순서다: 받을 사람들, 그다음 캐디피
+  assert.deepEqual(on.settlement.payments.map((p) => p.from + '>' + p.to), ['#pot>a', '#pot>b', '#pot>c', '#pot>d', '#pot>#caddie']);
+  assert.ok(on.settlement.payments.every((p) => p.fixed === true));
   assert.equal(on.settlement.payments.reduce((t, p) => t + p.amount, 0), 350000, 'exactly the money in the envelope is handed out');
   // 모자랄 때: 봉투의 돈은 캐디피와 딴 사람에게 가고, 모자란 만큼은 못 딴 사람이 더 낸다
   r.games.skins.caddie = 300000;
@@ -354,6 +357,9 @@ test('skins fund collected up front: profit and loss stay the same, the payments
   const bal = {};
   short.settlement.payments.forEach((p) => { bal[p.from] = (bal[p.from] || 0) - p.amount; bal[p.to] = (bal[p.to] || 0) + p.amount; });
   assert.deepEqual(bal, { '#pot': -350000, '#caddie': 300000, a: 67500, b: 7500, c: -12500, d: -12500 });
+  // 더 낼 사람은 다른 사람이 아니라 공금에 내고, 캐디피는 전부 공금에서 나간다 (장부의 "더 내요"와 같은 줄)
+  assert.deepEqual(short.settlement.payments.map((p) => [p.from + '>' + p.to, p.amount]),
+    [['#pot>a', 67500], ['#pot>b', 7500], ['c>#pot', 12500], ['d>#pot', 12500], ['#pot>#caddie', 300000]]);
   // 다른 게임(오장)과 합쳐도 송금 뒤에는 모두의 잔액이 맞는다
   r.games.skins.caddie = 150000; r.games.ojang = { enabled: true, unit: 1000 };
   const both = G.computeAll(r);
@@ -362,14 +368,69 @@ test('skins fund collected up front: profit and loss stay the same, the payments
   const got = {};
   both.settlement.payments.forEach((p) => { got[p.from] = (got[p.from] || 0) - p.amount; got[p.to] = (got[p.to] || 0) + p.amount; });
   Object.keys(want).forEach((k) => assert.equal(got[k] || 0, want[k], k));
+  // 공금 줄은 다른 게임이 있어도 그대로이고(장부와 같다), 다른 게임의 돈은 플레이어끼리만 오간다
+  const strip = (list) => list.map((p) => [p.from + '>' + p.to, p.amount]);
+  assert.deepEqual(strip(both.settlement.payments.filter((p) => p.fixed)), strip(on.settlement.payments));
+  const others = both.settlement.payments.filter((p) => !p.fixed);
+  assert.ok(others.length > 0 && others.every((p) => p.from.charAt(0) !== '#' && p.to.charAt(0) !== '#'));
+  const ojangNet = {};
+  others.forEach((p) => { ojangNet[p.from] = (ojangNet[p.from] || 0) - p.amount; ojangNet[p.to] = (ojangNet[p.to] || 0) + p.amount; });
+  both.ojang.rows.forEach((x) => assert.equal(ojangNet[x.id] || 0, x.amount, 'the other lines settle the 오장 money alone'));
   // 공금 방식이 꺼져 있거나 팀전이면 '미리 걷음'은 아무 일도 하지 않는다
   r.games.ojang.enabled = false; r.games.skins.fund = false;
   const plain = G.computeAll(r);
-  assert.equal(plain.skins.done, undefined); assert.ok(plain.settlement.payments.every((p) => p.from.charAt(0) !== '#' && p.to.charAt(0) !== '#'));
-  // settle: 이미 오간 돈은 손익이 아니라 송금 정리에서만 빠진다
-  const st = G.settle([{ from: 'a', to: 'b', amount: 5000, game: 'x' }], [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], [{ from: 'a', to: 'b', amount: 5000 }]);
-  assert.deepEqual(st.rows.map((x) => x.net), [5000, -5000]); assert.deepEqual(st.payments, []);
-  assert.deepEqual(G.settle([{ from: 'a', to: 'b', amount: 5000, game: 'x' }], [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], [{ from: 'zz', to: 'b', amount: 1 }]).payments, [{ from: 'a', to: 'b', amount: 5000 }], 'unknown ids are ignored');
+  assert.equal(plain.skins.payout, undefined); assert.ok(plain.settlement.payments.every((p) => p.from.charAt(0) !== '#' && p.to.charAt(0) !== '#'));
+  // settle: 줄이 정해진 게임은 그 줄 그대로 내고, 나머지 게임만 최소 횟수로 정리한다. 손익은 모든 게임의 합이다
+  const two = [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }];
+  const st = G.settle([{ from: 'a', to: '#pot', amount: 5000, game: 'f' }, { from: '#pot', to: 'b', amount: 5000, game: 'f' }, { from: 'b', to: 'a', amount: 2000, game: 'x' }], two,
+    { game: 'f', payments: [{ from: '#pot', to: 'b', amount: 3000 }] });
+  assert.deepEqual(st.rows.map((x) => [x.id, x.net]), [['b', 3000], ['a', -3000]]);
+  assert.deepEqual(st.payments, [{ from: '#pot', to: 'b', amount: 3000, fixed: true }, { from: 'b', to: 'a', amount: 2000 }]);
+  assert.deepEqual(G.settle([{ from: 'a', to: 'b', amount: 5000, game: 'x' }], two).payments, [{ from: 'a', to: 'b', amount: 5000 }]);
+  // 금액이 같은 사람끼리는 플레이어 순서로 짝을 짓는다 (송금이 적힌 순서가 아니다). 예전 기록의 송금 줄이 그대로 나오게 하는 약속이다
+  const three = [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }];
+  assert.deepEqual(G.settle([{ from: 'c', to: 'a', amount: 1000, game: 'x' }, { from: 'b', to: 'a', amount: 1000, game: 'x' }], three).payments,
+    [{ from: 'b', to: 'a', amount: 1000 }, { from: 'c', to: 'a', amount: 1000 }]);
+});
+
+test('skins fund collected up front: a player who owes pays the fund, exactly as the ledger says (skins 9 / 6 / 3 / 0)', () => {
+  // 기본 금액. a가 1~9번홀, b가 10~15번홀, c가 16~18번홀을 이긴다. 공금은 160,000원 모자라 1인당 40,000원
+  const win = (from, to) => Array.from({ length: 18 }, (_, h) => (h >= from && h <= to ? 3 : 4));
+  const r = oecdRound({ a: win(0, 8), b: win(9, 14), c: win(15, 17), d: Array(18).fill(4) });
+  r.games = { skins: Object.assign({ enabled: true, collect: true }, FUND) };
+  const all = G.computeAll(r);
+  assert.deepEqual(skinsOf(all.skins), { a: 9, b: 6, c: 3, d: 0 });
+  assert.deepEqual(Object.fromEntries(all.skins.entrants.map((e) => [e.id, e.due])), { a: 140000, b: 80000, c: 20000, d: -40000 });
+  assert.deepEqual(all.settlement.payments.map((p) => [p.from + '>' + p.to, p.amount]),
+    [['#pot>a', 140000], ['#pot>b', 80000], ['#pot>c', 20000], ['d>#pot', 40000], ['#pot>#caddie', 150000]]);
+  // 봉투: 걷어 둔 350,000 + 더 낸 40,000 = 나눠 준 240,000 + 캐디피 150,000
+  const pot = all.settlement.payments.reduce((t, p) => t + (p.to === '#pot' ? p.amount : p.from === '#pot' ? -p.amount : 0), 0);
+  assert.equal(all.skins.fund.cash + pot, 0);
+  // 오장을 함께 해도 공금 줄은 그대로이고 캐디피는 전부 공금에서 나간다
+  r.games.ojang = { enabled: true, unit: 5000 };
+  const both = G.computeAll(r);
+  assert.deepEqual(both.settlement.payments.filter((p) => p.fixed).map((p) => [p.from + '>' + p.to, p.amount]),
+    [['#pot>a', 140000], ['#pot>b', 80000], ['#pot>c', 20000], ['d>#pot', 40000], ['#pot>#caddie', 150000]]);
+  assert.ok(both.settlement.payments.filter((p) => !p.fixed).every((p) => p.from.charAt(0) !== '#' && p.to.charAt(0) !== '#'));
+  assert.deepEqual(both.settlement.payments.filter((p) => p.to === '#caddie').map((p) => [p.from, p.amount]), [['#pot', both.skins.fund.caddieDue]]);
+});
+
+test('skins fund collected up front needs money to collect: a stake that does not cover the start hand-outs is settled as not collected', () => {
+  const r = oecdRound({ a: [3, 4, 4], b: [4, 4, 3], c: [4, 4, 4], d: [4, 4, 4] });
+  [0, 10000, 12000].forEach((stake) => {
+    // 4명: 걷는 돈 0 / 40,000 / 48,000원, 시작 지급 50,000원
+    r.games = { skins: Object.assign({ enabled: true }, FUND, { stake, collect: false }) };
+    const off = G.computeAll(r);
+    r.games.skins.collect = true;
+    const on = G.computeAll(r);
+    assert.deepEqual([on.skins.fund.collect, on.skins.fund.cash, on.skins.payout], [false, 0, undefined], 'stake ' + stake);
+    assert.deepEqual(on.settlement, off.settlement, 'stake ' + stake);
+    assert.ok(on.settlement.payments.every((p) => p.from !== '#pot' && p.to !== '#pot'), 'stake ' + stake);
+  });
+  // 걷는 돈이 시작 지급보다 많아지면 다시 적용된다 (4명 × 13,000 = 52,000 > 50,000)
+  r.games.skins.stake = 13000;
+  const ok = G.computeAll(r);
+  assert.deepEqual([ok.skins.fund.collect, ok.skins.fund.cash], [true, 2000]);
 });
 
 test('play order: a round that starts on hole 10 carries skins, OECD membership and the 오장 all-square rule from 18 to 1', () => {
@@ -648,7 +709,7 @@ test('skins fund: an uneven split is made in whole won, so the payments to the c
   assert.ok(s.payments.every((p) => p.from.charAt(0) !== '#'), 'the fund account never appears as a payer when nothing was collected');
   // 미리 걷은 경우에도 걷어 둔 돈이 정확히 다 나간다
   const col = G.skins(r, Object.assign({ collect: true }, FUND));
-  const sc2 = G.settle(col.transfers, r.players, col.done);
+  const sc2 = G.settle(col.transfers, r.players, { game: 'skins', payments: col.payout });
   assert.equal(sc2.payments.filter((p) => p.from === '#pot').reduce((t, p) => t + p.amount, 0) - sc2.payments.filter((p) => p.to === '#pot').reduce((t, p) => t + p.amount, 0), col.fund.cash);
   assert.equal(sc2.payments.filter((p) => p.to === '#caddie').reduce((t, p) => t + p.amount, 0), col.fund.caddieDue);
   // 남는 경우: 3명, 시작 지급 없음, 캐디피를 내고 100,000원이 남는다 → 33,334 · 33,333 · 33,333
@@ -677,4 +738,13 @@ test('all files carry the same build number as the service worker cache', () => 
   const sw = Number(/CACHE = 'golf-score-v(\d+)'/.exec(fs.readFileSync(path.join(dir, 'sw.js'), 'utf8'))[1]);
   const app = Number(/var BUILD = (\d+);/.exec(fs.readFileSync(path.join(dir, 'app.js'), 'utf8'))[1]);
   assert.equal(G.BUILD, sw); assert.equal(require('../analysis.js').BUILD, sw); assert.equal(require('../sync.js').BUILD, sw); assert.equal(app, sw);
+  // 브라우저에서 쓰는 이름: 세 파일이 내놓는 이름을 app.js(와 analysis.js)가 그대로 읽어야 한다.
+  // 배포되어 있던 예전 app.js는 GolfGames · GolfSync · GolfAnalysis를 읽으므로, 그 이름을 다시 쓰면 예전 app.js가 새 파일과 섞여 돌아간다
+  const src = (f) => fs.readFileSync(path.join(dir, f), 'utf8');
+  [['games.js', 'GolfGames2'], ['sync.js', 'GolfSync2'], ['analysis.js', 'GolfAnalysis2']].forEach(([file, name]) => {
+    assert.ok(src(file).includes('root.' + name + ' = api;'), file + ' exports ' + name);
+    assert.ok(src('app.js').includes('window.' + name + ';'), 'app.js reads ' + name);
+    assert.ok(!new RegExp('root\\.' + name.slice(0, -1) + '\\s*=').test(src(file)), file + ' does not export the released name');
+  });
+  assert.ok(src('analysis.js').includes('root.GolfGames2 ||'), 'analysis.js reads GolfGames2');
 });

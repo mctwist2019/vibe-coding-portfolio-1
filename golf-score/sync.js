@@ -922,6 +922,21 @@
     if (meta && meta.updated) out.updated = meta.updated;
     return out;
   }
+  /**
+   * 코스 내용의 지문 (16진수 16자). readCourseFile이 돌려준 코스로 만든다. 코스 목록(tools/build-course-index.js)이 코스마다 붙이고,
+   * 앱은 받은 파일이 목록에 적힌 그 내용인지, 목록의 자료가 받아 둔 것과 달라졌는지 알아보는 데 쓴다.
+   * 내용이 달라졌는지 보는 용도일 뿐 보안용이 아니다 (목록과 파일은 앱과 같은 곳에서 온다)
+   */
+  function courseSig(course) {
+    var s = JSON.stringify(course), a = 0x811c9dc5, b = 0x01234567;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      a = Math.imul(a ^ c, 0x01000193);
+      b = Math.imul(b ^ c, 0x5bd1e995); b ^= b >>> 15;
+    }
+    a = Math.imul(a ^ (a >>> 16), 0x85ebca6b); b = Math.imul(b ^ (b >>> 13), 0xc2b2ae35);
+    return ('0000000' + (a >>> 0).toString(16)).slice(-8) + ('0000000' + (b >>> 0).toString(16)).slice(-8);
+  }
 
   return {
     BUILD: 13, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
@@ -933,6 +948,6 @@
     stampAll: stampAll, stamp: stamp, merge: merge, hasKeysMissingFrom: hasKeysMissingFrom, roundFromSnapshot: roundFromSnapshot, ensureScores: ensureScores,
     deriveRoom: deriveRoom, seal: seal, open: open, parseBrokerUrl: parseBrokerUrl,
     createSession: createSession,
-    COURSE_FORMAT: COURSE_FORMAT, COURSE_FILE_MAX: COURSE_FILE_MAX, readCourseFile: readCourseFile, makeCourseFile: makeCourseFile
+    COURSE_FORMAT: COURSE_FORMAT, COURSE_FILE_MAX: COURSE_FILE_MAX, readCourseFile: readCourseFile, makeCourseFile: makeCourseFile, courseSig: courseSig
   };
 });

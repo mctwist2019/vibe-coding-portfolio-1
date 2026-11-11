@@ -111,6 +111,44 @@ test('course file: the map accepts numbers only, within the drawing area', () =>
   assert.equal(S.readCourseFile(Object.assign(creekFile(), { map: 'x' })).ok, false);
 });
 
+test('course fingerprint: the same content gives the same value; every change to the content changes it', () => {
+  const read = (f) => { const r = S.readCourseFile(f); assert.equal(r.ok, true); return r.course; };
+  const base = S.courseSig(read(creekFile()));
+  assert.match(base, /^[0-9a-f]{16}$/);
+  assert.equal(S.courseSig(read(creekFile())), base);
+  // 파일의 모양(키 순서, 모르는 칸)이 달라도 읽은 내용이 같으면 같다
+  const f = creekFile(), other = { extra: 1 };
+  Object.keys(f).reverse().forEach((k) => { other[k] = f[k]; });
+  assert.equal(S.courseSig(read(other)), base);
+  // 앱에 저장되는 내용이 달라지면 달라진다
+  const changes = {
+    par: (x) => { x.pars[0] = x.pars[0] === 4 ? 5 : 4; },
+    handicap: (x) => { const t = x.strokeIndex[0]; x.strokeIndex[0] = x.strokeIndex[1]; x.strokeIndex[1] = t; },
+    distance: (x) => { x.holeInfo[0].dist += 1; },
+    shape: (x) => { x.holeInfo[0].shape = x.holeInfo[0].shape === 'L' ? 'R' : 'L'; },
+    hazard: (x) => { x.holeInfo[0].haz ^= 4; },
+    keyword: (x) => { x.holeInfo[0].memo += ' · 추가'; },
+    'map number': (x) => { x.map[17].g[0][0] += 1; },
+    'map tee distance': (x) => { x.map[0].t[0][3] += 1; },
+    name: (x) => { x.name += ' 2'; },
+    note: (x) => { x.note = '다른 설명'; },
+    date: (x) => { x.updated = '2026-11-12'; },
+    'no map': (x) => { delete x.map; }
+  };
+  const seen = new Set([base]);
+  Object.keys(changes).forEach((k) => { const x = creekFile(); changes[k](x); const sig = S.courseSig(read(x)); assert.equal(seen.has(sig), false, k); seen.add(sig); });
+  // 약도의 숫자 하나만 달라도 달라진다 (좌표를 하나씩 바꿔 가며)
+  let n = 0;
+  maps[creek.name].forEach((hm, h) => hm.o[0].forEach((v, i) => {
+    if (i % 2) return; // 가로 좌표만: 1을 더해도 그림 안에 있다
+    const x = creekFile(); x.map[h].o[0][i] = v + 1;
+    const r = S.readCourseFile(x);
+    if (!r.ok) return;
+    const sig = S.courseSig(r.course); assert.equal(seen.has(sig), false, 'hole ' + h + ' point ' + i); seen.add(sig); n++;
+  }));
+  assert.ok(n > 200, 'checked ' + n + ' single-number changes');
+});
+
 // 코스 폴더에 든 실제 파일의 내용을 여기서 못 박지 않는다: 그 파일들은 배포자가 GitHub에서 지우거나 바꿀 수 있고,
 // 시험이 그 때문에 실패하면 앱 배포 전체가 막힌다. 대신 꺼내기 도구가 만드는 파일이 기본 제공 자료와 같은지 본다
 test('built-in course export: the files written by the export tool equal the built-in courses', () => {
@@ -182,6 +220,8 @@ test('course list builder: valid files are listed, broken ones are skipped, the 
     const sigs = () => Object.fromEntries(build(dir).index.courses.map((c) => [c.file, c.sig]));
     const before = sigs();
     Object.keys(before).forEach((f) => assert.match(before[f], /^[0-9a-f]{16}$/, f));
+    // 앱이 받은 파일을 읽어 만드는 지문과 같은 값이다 (앱은 이것으로 목록이 가리키는 그 파일을 받았는지 확인한다)
+    Object.keys(before).forEach((f) => assert.equal(before[f], S.courseSig(S.readCourseFile(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8').replace(/^\uFEFF/, ''))).course), f));
     assert.equal(new Set(Object.values(before)).size, 4, 'different courses have different fingerprints');
     put('creek.json', JSON.stringify(creekFile(), null, 2) + '\n\n');
     assert.deepEqual(sigs(), before, 'the same course written with other spacing keeps its fingerprint');

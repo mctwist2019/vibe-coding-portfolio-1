@@ -22,6 +22,9 @@ function ensurePrecache() {
 }
 self.addEventListener('fetch', function (e) {
   if (e.request.method !== 'GET') return;
+  // 코스 폴더(courses/)의 목록과 코스 파일은 늘 네트워크에서 받고 저장해 두지 않는다. 연결이 안 될 때 예전 사본으로 답하면
+  // 앱이 그것을 지금 자료로 안다: 고쳐 올린 코스를 받았다고 적거나, 목록에 없는 코스라고 여기고 다시 찾지 않는다
+  if (e.request.url.indexOf(self.registration.scope + 'courses/') === 0) return;
   var isNav = e.request.mode === 'navigate';
   e.respondWith(
     fetch(e.request).then(function (res) {

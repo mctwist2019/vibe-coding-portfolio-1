@@ -2302,7 +2302,11 @@
     if (!r.ok) return r;
     if (entry && (r.course.name !== entry.name || r.course.holes !== entry.holes)) return { ok: false, why: 'format' };
     if (staleCopy(r.course)) return { ok: false, why: 'older' };
-    var bad = installCourse(r.course, from, entry ? entry.sig : '');
+    // 목록에 적힌 내용 지문과 받은 파일의 내용이 다르면 목록이 가리키는 그 자료가 아니다 (중간의 저장소가 예전 파일로 답한 경우 등).
+    // 받았다고 적어 두면 고쳐 올린 자료를 다시는 권하지 않게 되므로 받지 않는다
+    var sig = entry && entry.sig ? S.courseSig(r.course) : '';
+    if (sig && sig !== entry.sig) return { ok: false, why: 'stale' };
+    var bad = installCourse(r.course, from, sig);
     if (bad) return { ok: false, why: bad };
     return { ok: true, course: r.course };
   }
@@ -2316,7 +2320,8 @@
     newer: '이 파일은 앱을 최신 버전으로 업데이트해야 받을 수 있어요.',
     space: '기기 저장 공간이 부족해 받지 못했어요. 오래된 기록이나 안 쓰는 받은 코스를 지운 뒤 다시 받아 주세요.',
     full: '받은 코스가 가득 찼어요. 아래 "이 폰의 코스"에서 안 쓰는 받은 코스를 지운 뒤 다시 받아 주세요.',
-    older: '앱에 이미 더 새로운 자료가 들어 있는 코스예요.' };
+    older: '앱에 이미 더 새로운 자료가 들어 있는 코스예요.',
+    stale: '새 자료가 아직 준비되지 않았어요. 잠시 뒤 "새로 고침"을 누르고 다시 받아 주세요.' };
   function courseWhy(why) { return Object.prototype.hasOwnProperty.call(COURSE_WHY, why) ? COURSE_WHY[why] : '코스 파일의 내용이 올바르지 않아 받지 못했어요.'; }
   /** 받았다는 알림. 새 라운드 화면이 이 코스와 다른 홀 수로 열릴 때는(지난 라운드가 9홀이었던 경우 등) 홀 수를 바꾸라고 알려 준다 */
   function gotCourseMsg(c) {
@@ -2470,7 +2475,7 @@
       var e = (courseIndex.list || []).filter(function (x) { return x.name === name && x.holes === holes && x.map; })[0];
       if (!e) { t.done = true; return; }
       return fetchCourse(e).then(function (res) {
-        if (res.ok || res.why !== 'net') t.done = true;
+        if (res.ok || (res.why !== 'net' && res.why !== 'stale')) t.done = true; // 연결 문제나 아직 준비되지 않은 자료는 나중에 다시
         if (res.ok && state.round && (state.round.course || '').trim() === name) softRender();
       });
     }).catch(function () { /* 조용히 그만둔다 */ }).then(function () { t.busy = false; });

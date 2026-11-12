@@ -2674,8 +2674,22 @@
     var a = $app.querySelector('[data-action="open-courses"][data-back="setup"]'), card = whole && a && a.closest ? a.closest('.card') : null;
     return card ? card.getBoundingClientRect().bottom : a ? a.getBoundingClientRect().top : null;
   }
+  /**
+   * 리더보드의 탭 줄: 화면을 다시 그리면 옆으로 밀어 둔 위치가 맨 왼쪽으로 돌아가서, 뒤쪽 탭을 고를 때마다 줄을 다시 밀어야 했다.
+   * 그리기 전의 위치(x)를 되돌리고, 고른 탭이 줄 끝에 걸쳐 있으면 다 보이게 민다 (옆 탭이 조금 보이도록 여유를 둔다)
+   */
+  function keepTabStrip(x) {
+    var strip = $app.querySelector('.tabs'), cur = strip && strip.querySelector('button.active');
+    if (!strip) return;
+    if (x) strip.scrollLeft = x;
+    if (!cur) return;
+    var sr = strip.getBoundingClientRect(), cr = cur.getBoundingClientRect(), peek = 36;
+    if (cr.left < sr.left + peek) strip.scrollLeft += cr.left - sr.left - peek;
+    else if (cr.right > sr.right - peek) strip.scrollLeft += cr.right - sr.right + peek;
+  }
   function render() {
     var y = window.scrollY, mz = $app.querySelector('.mapzoom'), my = mz ? mz.scrollTop : 0; // 약도 크게 보기 창은 따로 스크롤된다
+    var tabs0 = $app.querySelector('.tabs'), tabsX = tabs0 ? tabs0.scrollLeft : 0;
     var keep = setupAnchorTop(), bar = keep === null ? null : $app.querySelector('.topbar'), lim = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
     var whole = keep !== null && setupAnchorTop(true) <= lim; // 카드가 통째로 화면 위로 지나갔으면 카드의 아랫변을 기준으로 삼는다
     if (whole) keep = setupAnchorTop(true); else if (keep !== null && keep > lim) keep = null; // 코스 칸이 보이는 중이면 그대로 둔다
@@ -2689,6 +2703,7 @@
     if (dy) window.scrollBy(0, dy);
     if (mz && my) mz.scrollTop = my;
     centerHoleStrip();
+    keepTabStrip(tabsX);
     fitSummary();
   }
   /** 다시 그린 뒤에도 방금 누른 버튼(sel)이 손가락 아래 그대로 있도록 스크롤을 맞춘다 (위쪽 내용이 늘거나 줄 때) */

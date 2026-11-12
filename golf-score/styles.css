@@ -276,7 +276,8 @@ details.adv summary { cursor: pointer; list-style: none; }
 details.adv summary::-webkit-details-marker { display: none; }
 details.adv summary::before { content: '▸ '; }
 details.adv[open] summary::before { content: '▾ '; }
-.toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px); background: #16211b; color: #fff; padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 50; }
+/* 너비를 글에 맞추되 화면을 넘지 않게: left 50%만 두면 상자가 화면 절반 너비로 줄어, 긴 안내가 좁고 높은 상자가 되고 둥근 모서리 밖으로 글자가 나간다 */
+.toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px); box-sizing: border-box; width: max-content; max-width: calc(100vw - 32px); background: #16211b; color: #fff; padding: 10px 16px; border-radius: 20px; font-size: 14px; font-weight: 600; line-height: 1.4; text-align: center; word-break: keep-all; overflow-wrap: anywhere; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 50; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ── 입력 범위(내 점수만/모두) · 홀별 상세 기록 ── */

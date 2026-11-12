@@ -21,7 +21,21 @@ function build(dir) {
   const valid = [], skipped = [];
   let files = [];
   try { files = fs.readdirSync(dir); } catch (e) { files = []; }
-  files.filter((f) => /\.json$/i.test(f) && f !== 'index.json' && f.charAt(0) !== '.').sort().forEach((file) => {
+  // 코스 파일로 읽지 않는 것도 이유를 남긴다 (올렸는데 목록에 안 나올 때 찾아볼 수 있게). README.md, .gitkeep, 이 도구가 만드는 index.json은 말없이 넘어간다
+  files.slice().sort().forEach((file) => {
+    if (file === 'README.md' || file === '.gitkeep') return;
+    let isDir = false;
+    try { isDir = fs.statSync(path.join(dir, file)).isDirectory(); } catch (e) { /* 아래에서 읽다가 걸러진다 */ }
+    if (isDir) { skipped.push([file + '/', 'a folder: course files inside a folder are not read']); return; }
+    if (file === 'index.json') {
+      // 코스 파일을 index.json이라는 이름으로 올렸으면 목록 파일로 덮어써진다
+      let o = null;
+      try { o = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8').replace(/^\uFEFF/, '')); } catch (e) { o = null; }
+      if (o && o.format === 'golf-score-course') skipped.push([file, 'the name index.json is used for the list itself: upload the course under another name']);
+      return;
+    }
+    if (file.charAt(0) === '.') { skipped.push([file, 'the file name starts with a dot']); return; }
+    if (!/\.json$/i.test(file)) { skipped.push([file, 'the file name must end in .json']); return; }
     if (!/^[^/\\?#%]{1,120}$/.test(file)) { skipped.push([file, 'file name']); return; } // 주소에 그대로 쓰기 어려운 이름
     let text;
     try { text = fs.readFileSync(path.join(dir, file), 'utf8'); } catch (e) { skipped.push([file, 'unreadable']); return; }

@@ -200,6 +200,10 @@ test('course list builder: valid files are listed, broken ones are skipped, the 
     put('index.json', { v: 1, courses: [{ file: 'stale.json' }] });
     put('.hidden.json', creekFile());
     put('notes.txt', 'x');
+    put('creek.json.txt', creekFile()); // 메모장이 붙인 .txt
+    put('README.md', '# 안내'); put('.gitkeep', '');
+    fs.mkdirSync(path.join(dir, '내 코스')); put(path.join('내 코스', 'inside.json'), creekFile()); // 폴더째 올린 것
+    fs.mkdirSync(path.join(dir, 'folder.json'));
     put('﻿bom.json'.slice(1), '﻿' + JSON.stringify(Object.assign(creekFile(), { name: 'BOM 골프장' })));
     const res = build(dir);
     assert.deepEqual(res.index.v, 1);
@@ -211,8 +215,11 @@ test('course list builder: valid files are listed, broken ones are skipped, the 
     ].sort((a, b) => res.index.courses.findIndex((c) => c.file === a[0]) - res.index.courses.findIndex((c) => c.file === b[0])));
     assert.deepEqual(res.index.courses.map((c) => c.file).sort(), ['bear-newer.json', 'bom.json', 'creek.json', 'nine.json']);
     assert.equal(res.index.courses.find((c) => c.file === 'bear-newer.json').note, '고친 것');
-    assert.deepEqual(res.skipped.map((s) => s[0]).sort(), ['badmap.json', 'bear.json', 'broken.json', 'other.json']);
-    assert.deepEqual(Object.fromEntries(res.skipped), { 'badmap.json': 'map', 'bear.json': 'same course as bear-newer.json', 'broken.json': 'not JSON', 'other.json': 'format' });
+    // 목록에 넣지 않은 것은 이름이나 자리 때문에 읽지 않은 것까지 모두 이유가 남는다 (각각 한 줄씩). README.md, .gitkeep, 만들어진 index.json은 말없이 넘어간다
+    assert.deepEqual(res.skipped.map((s) => s[0]).sort(), ['.hidden.json', 'badmap.json', 'bear.json', 'broken.json', 'creek.json.txt', 'folder.json/', 'notes.txt', 'other.json', '내 코스/']);
+    assert.deepEqual(Object.fromEntries(res.skipped), { 'badmap.json': 'map', 'bear.json': 'same course as bear-newer.json', 'broken.json': 'not JSON', 'other.json': 'format',
+      '.hidden.json': 'the file name starts with a dot', 'notes.txt': 'the file name must end in .json', 'creek.json.txt': 'the file name must end in .json',
+      '내 코스/': 'a folder: course files inside a folder are not read', 'folder.json/': 'a folder: course files inside a folder are not read' });
     // 이름 순 (같은 이름이면 홀 수 순)
     const names = res.index.courses.map((c) => c.name);
     assert.deepEqual(names, names.slice().sort((a, b) => a.localeCompare(b, 'ko')));
@@ -233,6 +240,9 @@ test('course list builder: valid files are listed, broken ones are skipped, the 
     const memo = creekFile(); memo.holeInfo[0].memo = '고친 키워드';
     put('creek.json', memo);
     assert.notEqual(sigs()['creek.json'], before['creek.json']);
+    // 코스 파일을 index.json이라는 이름으로 올린 경우: 목록 파일로 덮어써지므로 이유를 남긴다
+    put('index.json', creekFile());
+    assert.equal(Object.fromEntries(build(dir).skipped)['index.json'], 'the name index.json is used for the list itself: upload the course under another name');
     // 빈 폴더, 없는 폴더
     assert.deepEqual(build(path.join(dir, 'nope')), { index: { v: 1, courses: [] }, skipped: [] });
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

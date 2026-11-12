@@ -2246,7 +2246,8 @@
     var el = document.getElementById('toast');
     if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); }
     el.textContent = msg; el.classList.add('show');
-    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2200);
+    // 긴 안내는 읽을 시간을 더 준다 (글자 수에 맞춰, 최대 6초)
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.classList.remove('show'); }, Math.min(6000, Math.max(2200, String(msg).length * 75)));
   }
 
   // ───────────────────────── 렌더 & 이벤트 ─────────────────────────
@@ -2277,7 +2278,8 @@
   var FETCH_MS = 15000;
   function fetchText(url) {
     var ctl = typeof AbortController === 'function' ? new AbortController() : null, timer = null;
-    var work = Promise.resolve().then(function () { return fetch(url, ctl ? { cache: 'no-cache', signal: ctl.signal } : { cache: 'no-cache' }); })
+    // cache: 'no-store': 브라우저의 보관본을 거치지 않는다. 멈춘 요청이 하나 남아 있어도 다시 시도한 요청이 그 뒤에서 기다리지 않는다
+    var work = Promise.resolve().then(function () { return fetch(url, ctl ? { cache: 'no-store', signal: ctl.signal } : { cache: 'no-store' }); })
       .then(function (res) { if (!res.ok) throw new Error('http ' + res.status); return res.text(); });
     var limit = new Promise(function (resolve, reject) {
       timer = setTimeout(function () { if (ctl) { try { ctl.abort(); } catch (e) { /* 이미 끝남 */ } } reject(new Error('timeout')); }, FETCH_MS);
@@ -2312,7 +2314,9 @@
   }
   /** 목록의 코스 하나를 받아 보관함에 넣는다 → Promise<{ ok, course } | { ok: false, why }> (거부되지 않는다) */
   function fetchCourse(entry) {
-    return fetchText(COURSE_DIR + encodeURIComponent(entry.file))
+    var url;
+    try { url = COURSE_DIR + encodeURIComponent(entry.file); } catch (e) { return Promise.resolve({ ok: false, why: 'bad' }); } // 주소로 쓸 수 없는 이름
+    return fetchText(url)
       .then(function (text) { return takeCourseText(text, 'list', entry); }, function () { return { ok: false, why: 'net' }; })
       .catch(function () { return { ok: false, why: 'bad' }; });
   }
@@ -2436,6 +2440,10 @@
     } catch (e3) { toast('이 기기에서는 파일로 저장할 수 없어요.'); }
   }
   /** "코스 파일 열기"에서 고른 파일을 읽어 받는다 */
+  /** 코스를 받은 뒤 화면을 맞춘다. 그 사이에 새 라운드 화면으로 돌아가 있었으면 "코스 불러오기"에 방금 받은 코스가 나오게 한다 (이름을 치는 중이면 다 친 뒤에) */
+  function afterCourseChange() {
+    if (state.view === 'courses') render(); else if (state.view === 'setup') softRender();
+  }
   function importCourseFile(el) {
     var file = el.files && el.files[0];
     el.value = '';
@@ -2445,7 +2453,7 @@
     rd.onload = function () {
       var res = takeCourseText(String(rd.result || ''), 'file');
       toast(res.ok ? gotCourseMsg(res.course) : courseWhy(res.why));
-      if (state.view === 'courses') render();
+      afterCourseChange();
     };
     rd.onerror = function () { toast('파일을 읽지 못했어요.'); };
     rd.readAsText(file);
@@ -2467,13 +2475,22 @@
   function ensureRoundCourse() {
     var r = state.round; if (!r) return;
     var name = (r.course || '').trim(), holes = r.holes, key = holes + '|' + name, t = autoCourse[key];
-    if (!name || (t && (t.done || t.busy || Date.now() - t.at < AUTO_COURSE_GAP)) || courseMapOf(name, holes) || libCourse(name, holes)) return;
+    if (!name || (t && t.done) || courseMapOf(name, holes) || libCourse(name, holes)) return;
+    if (t && (t.busy || Date.now() - t.at < AUTO_COURSE_GAP)) {
+      // 시도하는 중이거나 간격이 덜 지났다: 버리지 않고 간격이 끝날 때 한 번 다시 본다
+      // (연결이 몇 초 만에 돌아오면 그때의 신호가 간격 안에 들어와서, 화면을 켜 둔 채로는 다시 시도할 계기가 없어진다)
+      if (!t.timer) t.timer = setTimeout(function () { t.timer = null; ensureRoundCourse(); }, Math.max(1000, AUTO_COURSE_GAP - (Date.now() - t.at)));
+      return;
+    }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
-    t = autoCourse[key] = { done: false, busy: true, at: Date.now() };
+    if (t && t.timer) clearTimeout(t.timer);
+    t = autoCourse[key] = { done: false, busy: true, at: Date.now(), timer: null };
     loadCourseIndex().then(function () {
       if (courseIndex.state !== 'ok') return; // 목록을 받지 못했다: 나중에 다시
       var e = (courseIndex.list || []).filter(function (x) { return x.name === name && x.holes === holes && x.map; })[0];
       if (!e) { t.done = true; return; }
+      var cur = state.round;
+      if (!cur || (cur.course || '').trim() !== name || cur.holes !== holes) return; // 목록을 기다리는 사이에 그 라운드를 떠났다: 받지 않는다
       return fetchCourse(e).then(function (res) {
         if (res.ok || (res.why !== 'net' && res.why !== 'stale')) t.done = true; // 연결 문제나 아직 준비되지 않은 자료는 나중에 다시
         if (res.ok && state.round && (state.round.course || '').trim() === name) softRender();
@@ -2769,7 +2786,7 @@
       fetchCourse(e).then(function (res) {
         libBusy = null;
         toast(res.ok ? gotCourseMsg(res.course) : courseWhy(res.why));
-        if (state.view === 'courses') render();
+        afterCourseChange();
       });
     },
     'lib-del': function (d) {

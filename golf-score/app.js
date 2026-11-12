@@ -1677,7 +1677,39 @@
     } else if (!state.readOnly) {
       html += '<div class="muted small center">타당 금액을 설정하면 스트로크 내기도 정산돼요.</div>';
     }
-    return html;
+    return html + holeScoresCard(r, res);
+  }
+
+  /**
+   * 종합 탭의 홀별 스코어 표: 홀이 줄, 플레이어가 칸(라운드에 적힌 순서). 칸마다 그 홀의 타수와 파 대비 이름(버디 · 파 · 보기 · 더블 …).
+   * 18홀이면 전반 · 후반 소계, 끝에 합계(타수와 ±파: 입력한 홀만 센다). 네 명까지는 카드 너비에 맞추고, 더 많으면 표만 옆으로 민다
+   */
+  function holeScoresCard(r, res) {
+    var rows = r.players.map(function (p) { return res.rows.filter(function (x) { return x.id === p.id; })[0]; });
+    var wide = rows.length > 4;
+    var cell = function (strokes, toPar, label) {
+      return '<td><b>' + strokes + '</b> <span class="lb ' + tpClass(toPar) + '">' + label + '</span></td>';
+    };
+    var sumRow = function (name, from, to) {
+      return '<tr class="sum"><td>' + name + '</td>' + rows.map(function (p) {
+        var g = 0, par = 0, n = 0;
+        for (var h = from; h < to; h++) if (p.holes[h] !== null) { g += p.holes[h]; par += r.pars[h]; n++; }
+        return n ? cell(g, g - par, G.fmtToPar(g - par)) : '<td></td>';
+      }).join('') + '</tr>';
+    };
+    var html = '<div class="card"><h2>홀별 스코어<span class="hint">타수 · 파 대비</span></h2><div class="tablewrap">' +
+      '<table class="byhole' + (wide ? ' wide" style="min-width:' + (52 + 58 * rows.length) + 'px' : '') + '"><thead><tr><th>홀</th>' +
+      rows.map(function (p) { return '<th>' + esc(p.name) + '</th>'; }).join('') + '</tr></thead><tbody>';
+    for (var i = 0; i < r.holes; i++) {
+      html += '<tr><td><b>' + (i + 1) + '</b> <span class="lb">파' + r.pars[i] + '</span></td>' + rows.map(function (p) {
+        var s = p.holes[i];
+        return s === null ? '<td></td>' : cell(s, s - r.pars[i], G.toParShort(s - r.pars[i], r.pars[i]));
+      }).join('') + '</tr>';
+      if (i === 8 && r.holes === 18) html += sumRow('전반', 0, 9);
+    }
+    if (r.holes === 18) html += sumRow('후반', 9, 18);
+    html += sumRow('합계', 0, r.holes);
+    return html + '</tbody></table></div></div>';
   }
 
   function tabStableford(r, all) {

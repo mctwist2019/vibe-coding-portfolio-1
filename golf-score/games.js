@@ -106,6 +106,12 @@
     return '+' + diff;
   }
 
+  /** toParLabel의 짧은 이름 (좁은 표용): 더블보기 → 더블, 트리플보기 → 트리플. 나머지는 같다 */
+  function toParShort(diff, par) {
+    var t = toParLabel(diff, par);
+    return t === '더블보기' ? '더블' : t === '트리플보기' ? '트리플' : t;
+  }
+
   function fmtToPar(d) {
     if (d === 0) return 'E';
     return d > 0 ? '+' + d : String(d);
@@ -892,6 +898,7 @@
     maxScore: maxScore,
     score: score,
     toParLabel: toParLabel,
+    toParShort: toParShort,
     fmtToPar: fmtToPar,
     playerById: playerById,
     teamsOf: teamsOf,

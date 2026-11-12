@@ -980,3 +980,14 @@ test('individual match play has no best list, and a team of one names that playe
   assert.deepEqual(m.best.slice(0, 3), [{ a: { score: 4, pids: ['a'] }, b: { score: 5, pids: ['b'] } }, { a: { score: 5, pids: ['a'] }, b: { score: 5, pids: ['b'] } }, null]);
   assert.equal(G.teamHoleBest(t, ['a', 'b'], 2, false), null);
 });
+
+test('toParShort: the short names used in the hole-by-hole table', () => {
+  assert.deepEqual([-3, -2, -1, 0, 1, 2, 3].map(d => G.toParShort(d, 5)), ['알바트로스', '이글', '버디', '파', '보기', '더블', '트리플']);
+  assert.equal(G.toParShort(4, 5), '+4');
+  // 파의 두 배(양파)는 긴 이름과 같다
+  assert.deepEqual([G.toParShort(3, 3), G.toParShort(4, 4), G.toParShort(5, 5)], ['양파', '양파', '양파']);
+  for (let par = 3; par <= 5; par++) for (let d = -3; d <= 6; d++) {
+    const long = G.toParLabel(d, par), short = G.toParShort(d, par);
+    assert.equal(short, long === '더블보기' ? '더블' : long === '트리플보기' ? '트리플' : long);
+  }
+});

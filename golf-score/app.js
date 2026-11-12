@@ -1926,12 +1926,12 @@
       (mteam ? res.matches.map(function (m) { return matchBestCard(r, m, res.net); }).join('') : '');
   }
 
-  /** 팀 매치: 홀마다 두 팀에 적용된 타수(팀에서 가장 잘 친 타수)와 그 타수를 친 사람. 이긴 팀의 칸은 위 점 표시와 같은 색의 굵은 글씨 */
+  /** 팀 매치 · 팀 나소: 홀마다 두 팀에 적용된 타수(팀에서 가장 잘 친 타수)와 그 타수를 친 사람. 이긴 팀의 칸은 위 점 표시와 같은 색의 굵은 글씨 */
   function matchBestCard(r, m, net) {
     var rows = '';
     (m.best || []).forEach(function (b, h) {
       if (!b || !b.a || !b.b) return;
-      var v = m.status.holes[h];
+      var v = b.a.score < b.b.score ? 1 : b.a.score > b.b.score ? -1 : 0; // 타수가 적은 쪽이 그 홀을 이긴다 (매치 · 나소의 홀 승패와 같다)
       var cell = function (x, cls) {
         return '<td class="l' + cls + '">' + x.pids.map(function (pid) { return esc(nameOf(r, pid)); }).join(' · ') + ' <b>' + x.score + '</b></td>';
       };
@@ -1953,7 +1953,8 @@
     if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '.');
     return '<div class="card">' + head + rule + '</div>' + res.matches.map(function (m) {
       return '<div class="card"><h2>' + esc(m.a.name) + ' vs ' + esc(m.b.name) + '</h2><div class="stack">' +
-        m.segments.map(function (s) { return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div>' + matchBox(m, s.status, s.money && res.enabled ? won(s.money) : null); }).join('') + '</div></div>';
+        m.segments.map(function (s) { return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div>' + matchBox(m, s.status, s.money && res.enabled ? won(s.money) : null); }).join('') + '</div></div>' +
+        (nteam ? matchBestCard(r, m, res.net) : '');
     }).join('');
   }
 

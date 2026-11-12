@@ -1018,3 +1018,29 @@ test('match play in progress reports the amount at the current standing, but pay
   const all = G.computeAll(Object.assign(r, { games: { match: { enabled: true, unit: 10000, mode: 'team' } } }));
   assert.ok(all.settlement.rows.every((x) => x.net === 0));
 });
+
+test('team nassau lists the stroke applied for each team on every hole that counts in one of the three matches', () => {
+  // 전반: A팀이 1~5번홀을 이겨 5&4로 끝난다(6~9번홀은 전반에 안 들어가지만 전체에는 들어간다). 후반은 10~12번홀만 입력
+  const a = [3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 4], b = Array(12).fill(6), c = [4, 4, 4, 4, 4, 4, 4, 3, 4, 4, 4, 4], d = Array(12).fill(6);
+  const r = mkRound(TEAM4, { a, b, c, d });
+  const res = G.nassau(r, { unit: 5000, mode: 'team' });
+  const m = res.matches[0];
+  assert.deepEqual(m.segments.map(s => s.status.text), ['5&4', '1UP (3홀)', '3UP (12홀)']); // 후반은 11번홀을 B팀이, 전체는 A팀이 5홀 · B팀이 2홀
+  assert.equal(m.best.length, 18);
+  assert.deepEqual(m.best.map(x => !!x), Array(12).fill(true).concat(Array(6).fill(false)));
+  assert.deepEqual(m.best[0], { a: { score: 3, pids: ['a'] }, b: { score: 4, pids: ['c'] } });
+  assert.deepEqual(m.best[5], { a: { score: 4, pids: ['a'] }, b: { score: 4, pids: ['c'] } });
+  assert.deepEqual(m.best[7], { a: { score: 4, pids: ['a'] }, b: { score: 3, pids: ['c'] } });
+  assert.deepEqual(m.best[10], { a: { score: 5, pids: ['a'] }, b: { score: 4, pids: ['c'] } });
+  // 적용된 타수의 승패는 전체 판의 홀 표시와 같다
+  m.best.forEach((x, h) => { if (x) assert.equal(Math.sign(x.b.score - x.a.score), m.segments[2].status.holes[h]); });
+  // 세 판이 모두 끝난 뒤의 홀은 넣지 않는다: 전반 5&4, 후반 5&4, 전체는 10번홀에서 10&8
+  const all = mkRound(TEAM4, { a: Array(18).fill(3), b: Array(18).fill(6), c: Array(18).fill(4), d: Array(18).fill(6) });
+  const m2 = G.nassau(all, { unit: 5000, mode: 'team' }).matches[0];
+  assert.deepEqual(m2.segments.map(s => s.status.text), ['5&4', '5&4', '10&8']);
+  assert.deepEqual(m2.best.map(x => !!x), [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0].map(Boolean));
+  // 개인 나소에는 없다. 돈은 그대로: 세 판 × 5,000원
+  assert.ok(G.nassau(mkRound([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], { a: [4], b: [5] }), { mode: 'individual' }).matches.every(x => !('best' in x)));
+  const net = Object.fromEntries(G.settle(G.nassau(all, { unit: 5000, mode: 'team' }).transfers, all.players).rows.map(x => [x.id, x.net]));
+  assert.deepEqual(net, { a: 15000, b: 15000, c: -15000, d: -15000 });
+});

@@ -627,6 +627,14 @@
         }
         m.segments.push(seg);
       });
+      // 팀 나소: 세 판 중 하나에라도 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (매치 플레이의 best와 같은 모양)
+      if (A.isTeam) {
+        m.best = [];
+        for (var h = 0; h < round.holes; h++) {
+          var counted = m.segments.some(function (sg2, k) { var i = h - segs[k].from; return i >= 0 && i < sg2.status.holes.length && sg2.status.holes[i] !== null; });
+          m.best.push(counted ? { a: teamHoleBest(round, A.pids, h, useNet, sm), b: teamHoleBest(round, B.pids, h, useNet, sm) } : null);
+        }
+      }
       res.matches.push(m);
     });
     return res;

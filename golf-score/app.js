@@ -194,7 +194,8 @@
   function upgradeDefaults(g, from) {
     if (from < 11) useNewSkinsDefaults(g);
     if (from < 12) useNewBonusDefaults(g);
-    if (from < 14 && !(typeof g.skins.join === 'number' && g.skins.join >= 1)) g.skins.join = OECD_JOIN;
+    // 숫자가 아닌 값(손상된 저장 자료)은 어느 버전의 것이든 새 라운드로 넘기지 않는다. 화면과 공유로는 숫자만 들어온다
+    if (typeof g.skins.join !== 'number' || (from < 14 && !(g.skins.join >= 1))) g.skins.join = OECD_JOIN;
     g.bonus.made = BUILD;
     return g;
   }
@@ -205,6 +206,7 @@
    *  - 예전 기기가 쓴 스냅샷으로 참여해 호스트의 가입 기준을 끝내 받지 못한 기기
    * 이때 빠진 칸은 0으로 채워져 있을 뿐 본전 기준을 고른 것이 아니므로, 14보다 앞에서 만든 것으로 보고 새 기본값(6만 원)을 준다.
    * 이 버전에서 시작한 라운드는 시작할 때 모든 설정에 수정 기록이 찍히고(stampAll), 참여한 기기는 호스트의 기록을 함께 받는다.
+   * 공유를 시작할 때는 기록이 없는 가입 기준에 기록을 찍지 않는다 (startSharing).
    * 지난 라운드 자체(설정과 '만든 버전' 표시)는 건드리지 않는다: 표시는 함께 입력하는 기기들이 나눠 갖는 값이다
    */
   function copiedFrom(prev) {
@@ -471,7 +473,12 @@
     if (!S.cryptoAvailable()) { alert('이 환경에서는 실시간 공유를 사용할 수 없어요. HTTPS 주소(GitHub Pages 등)로 열어 주세요.'); return; }
     r.share = { code: S.randomCode(), host: state.clientId, active: true, broker: 0 };
     r.status = 'live';
+    // 가입 기준에 수정 기록이 없으면(예전 버전인 채로 참여했거나 예전 기기의 스냅샷으로 받은 라운드) 채워져 있는 0은 누가 고른 값이 아니다.
+    // 여기서 기록을 찍으면 그 0이 고른 값이 되어 다음 라운드로 넘어가고, 호스트가 정한 금액과 같은 시각(createdAt)으로 겨뤄 이길 수도 있다.
+    // 기록 없이 두면 ts 0으로 전해져 호스트의 금액에 항상 지고, 새 라운드는 6만 원으로 시작한다 (copiedFrom)
+    var hadJoin = !!(r.rev && r.rev['gm:skins:join']);
     S.stampAll(r, r.createdAt || (Date.now() - 1), state.clientId);
+    if (!hadJoin) delete r.rev['gm:skins:join'];
     resetBaseline(); save();
     beginScan(r.share.code, 'host', 0);
     go('share');

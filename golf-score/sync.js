@@ -52,7 +52,7 @@
   var GAME_SCHEMA = {
     stroke: { enabled: 'bool', net: 'bool', unit: 'money', cap: 'bool' },
     stableford: { enabled: 'bool', net: 'bool' },
-    skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money', fund: 'bool', stake: 'money', prize: 'money', start: 'money', tip: 'money', caddie: 'money', collect: 'bool', oecd: 'bool', fine: 'money', playorder: 'bool' },
+    skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money', fund: 'bool', stake: 'money', prize: 'money', start: 'money', tip: 'money', caddie: 'money', collect: 'bool', oecd: 'bool', fine: 'money', join: 'money', playorder: 'bool' },
     ojang: { enabled: 'bool', net: 'bool', unit: 'money', carry: 'bool', birdie: 'bool', near: 'bool' },
     match: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
     nassau: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money' },
@@ -939,7 +939,7 @@
   }
 
   return {
-    BUILD: 13, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 14, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, HAZ_BITS: HAZ_BITS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,

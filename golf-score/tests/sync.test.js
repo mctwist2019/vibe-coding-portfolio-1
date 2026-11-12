@@ -435,7 +435,7 @@ test('new game settings (skins fund and OECD, 오장, double-par cap) are valida
   const r = { id: 'r', holes: 18, date: 'd', createdAt: 1, name: 'n', pars: Array(18).fill(4), strokeIndex: Array.from({ length: 18 }, (_, i) => i + 1),
     players: [{ id: 'a', name: 'A', hcp: 0, team: '' }], scores: { a: Array(18).fill(null) }, extras: {}, status: 'live', rev: {},
     games: { skins: { enabled: true, net: false, mode: 'individual', unit: 1000, fund: true, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, collect: true, oecd: true, fine: 10000 } } };
-  assert.deepEqual(Object.keys(S.GAME_SCHEMA.skins).sort(), ['caddie', 'collect', 'enabled', 'fine', 'fund', 'mode', 'net', 'oecd', 'playorder', 'prize', 'stake', 'start', 'tip', 'unit']);
+  assert.deepEqual(Object.keys(S.GAME_SCHEMA.skins).sort(), ['caddie', 'collect', 'enabled', 'fine', 'fund', 'join', 'mode', 'net', 'oecd', 'playorder', 'prize', 'stake', 'start', 'tip', 'unit']);
   ['fund', 'stake', 'prize', 'start', 'tip', 'caddie', 'collect', 'oecd', 'fine'].forEach((f) => assert.ok(S.allKeys(r).includes('gm:skins:' + f), f));
   assert.equal(S.getKey(r, 'gm:skins:stake'), 100000);
   assert.equal(S.setKey(r, 'gm:skins:stake', 50000), true); assert.equal(r.games.skins.stake, 50000);
@@ -443,9 +443,15 @@ test('new game settings (skins fund and OECD, 오장, double-par cap) are valida
   assert.equal(S.setKey(r, 'gm:skins:caddie', 'x'), false); assert.equal(r.games.skins.caddie, 150000);
   assert.equal(S.setKey(r, 'gm:skins:fund', 'maybe'), false); assert.equal(r.games.skins.fund, true);
   assert.equal(S.setKey(r, 'gm:skins:oecd', false), true); assert.equal(r.games.skins.oecd, false);
+  // OECD 가입 기준: 금액으로 검증하고, 예전 라운드(값이 없음)는 키를 보내지 않는다
+  assert.ok(!S.allKeys(r).includes('gm:skins:join'), 'a round without the setting does not send it');
+  assert.equal(S.setKey(r, 'gm:skins:join', 60000), true); assert.equal(r.games.skins.join, 60000); assert.ok(S.allKeys(r).includes('gm:skins:join'));
+  assert.equal(S.setKey(r, 'gm:skins:join', 0), true); assert.equal(r.games.skins.join, 0, '0 (the old rule) is a valid value');
+  assert.equal(S.setKey(r, 'gm:skins:join', 'many'), false); assert.equal(r.games.skins.join, 0);
+  assert.equal(S.setKey(r, 'gm:skins:join', -5), true); assert.equal(r.games.skins.join, 0, 'money is clamped at zero');
   assert.equal(S.setKey(r, 'gm:skins:collect', false), true); assert.equal(r.games.skins.collect, false);
   assert.equal(S.setKey(r, 'gm:skins:collect', 'yes'), false); assert.equal(r.games.skins.collect, false);
-  assert.equal(S.setKey(r, 'gm:skins:join', 3), false, 'no such setting');
+  assert.equal(S.setKey(r, 'gm:skins:member', 3), false, 'no such setting');
   assert.equal(S.allKeys(r).includes('gm:skins:playorder'), false, 'a round without the stamp does not send one');
   assert.equal(S.setKey(r, 'gm:skins:playorder', true), true); assert.equal(r.games.skins.playorder, true);
   assert.ok(S.allKeys(r).includes('gm:skins:playorder'));

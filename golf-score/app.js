@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 13;
+  var BUILD = 14;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -152,7 +152,9 @@
       // 새 라운드는 newDraft에서 공금 방식을 켠 채로 시작한다.
       // playorder(이월을 친 순서로)도 같은 이유로 꺼 둔다: 10번홀에서 출발한 예전 기록의 스킨스가 홀 번호 순 그대로 남는다.
       // 이 값은 화면에서 바꿀 수 없어서 '이 버전에서 만든 라운드'라는 표시로도 쓴다 (useNewSkinsDefaults)
-      skins: { enabled: false, net: false, mode: 'individual', unit: 1000, fund: false, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, collect: false, oecd: false, fine: 10000, playorder: false },
+      // join(OECD 가입 기준: 상금으로 받은 돈)도 같은 이유로 0이다. 0은 '예전 기준(공금에서 받은 돈이 낸 돈 이상)'이라는 뜻이라
+      // 이 설정이 생기기 전(13까지)에 만든 라운드의 벌금이 바뀌지 않는다. 새 라운드는 OECD_JOIN(6만 원)으로 시작한다 (upgradeDefaults)
+      skins: { enabled: false, net: false, mode: 'individual', unit: 1000, fund: false, stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, collect: false, oecd: false, fine: 10000, join: 0, playorder: false },
       ojang: { enabled: false, net: false, unit: 5000, carry: true, birdie: true, near: true },
       match: { enabled: false, net: false, mode: 'individual', unit: 1000 },
       nassau: { enabled: false, net: false, mode: 'individual', unit: 5000 },
@@ -172,6 +174,8 @@
   }
   /** 새 라운드의 스킨스: 공금 방식 + OECD 룰 + 공금을 미리 걷음 + 이월은 친 순서로 (스킨스 정산을 켜야 실제로 반영된다) */
   function useNewSkinsDefaults(g) { g.skins.fund = true; g.skins.oecd = true; g.skins.collect = true; g.skins.playorder = true; return g; }
+  /** 새 라운드의 OECD 가입 기준: 상금으로 6만 원(홀당 2만 원이면 스킨 3개)을 받으면 가입한다 */
+  var OECD_JOIN = 60000;
   /** 공금 방식이 생긴 버전(11) 이후에 만든 라운드의 게임 설정인가 */
   function madeHere(g) { return !!(g && g.skins && g.skins.playorder); }
   /** 새 라운드의 니어·롱기: 니어는 파3 홀에서만, 롱기는 파5 홀에서만 고르고, 파3의 지우개 룰을 쓴다 */
@@ -182,12 +186,14 @@
    */
   function madeBy(g) { var m = g && g.bonus ? Number(g.bonus.made) : 0; return m > 0 ? m : madeHere(g) ? 11 : 10; }
   /**
-   * 예전 버전(from)에서 만든 게임 설정으로 새 라운드를 시작할 때: 그 뒤에 생긴 기본값을 준다 (11: 스킨스 공금 방식, 12: 니어·롱기 홀 제한과 지우개).
+   * 예전 버전(from)에서 만든 게임 설정으로 새 라운드를 시작할 때: 그 뒤에 생긴 기본값을 준다
+   * (11: 스킨스 공금 방식, 12: 니어·롱기 홀 제한과 지우개, 14: OECD 가입 기준 6만 원).
    * 이 버전에서 만든 설정을 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다
    */
   function upgradeDefaults(g, from) {
     if (from < 11) useNewSkinsDefaults(g);
     if (from < 12) useNewBonusDefaults(g);
+    if (from < 14) g.skins.join = OECD_JOIN;
     g.bonus.made = BUILD;
     return g;
   }
@@ -1314,10 +1320,12 @@
           fundRow('캐디피', P + 'skins.caddie', sk.caddie, 10000, !sk.enabled) + '</div>' +
           toggle(P + 'skins.collect', sk.collect, '공금을 미리 걷음 <span class="muted small" style="font-weight:500">돈을 걷고 시작 지급도 함</span>') +
           '<span class="optbreak"></span>' +
-          toggle(P + 'skins.oecd', sk.oecd, 'OECD 룰 <span class="muted small" style="font-weight:500">본전 찾은 사람 벌금</span>') +
-          (sk.oecd ? '<div class="fundgrid">' + fundRow('벌금 (걸린 항목마다)', P + 'skins.fine', sk.fine, 1000, !sk.enabled) + '</div>' : '') +
+          toggle(P + 'skins.oecd', sk.oecd, 'OECD 룰 <span class="muted small" style="font-weight:500">상금을 많이 받은 사람 벌금</span>') +
+          (sk.oecd ? '<div class="fundgrid">' + fundRow('가입 기준 (받은 상금)', P + 'skins.join', sk.join, 10000, !sk.enabled) +
+            fundRow('벌금 (걸린 항목마다)', P + 'skins.fine', sk.fine, 1000, !sk.enabled) + '</div>' : '') +
           '<span class="optnote">각자 낸 돈을 모은 공금에서 시작할 때 플레이어와 캐디에게 나눠 주고, 홀 상금을 승자에게 줘요. ' +
-          (sk.oecd ? '공금에서 받은 돈이 낸 돈 이상이 된 사람(OECD 가입)이 <b>OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상</b>을 하면 항목마다 벌금을 공금에 넣어요. 벌금을 내서 받은 돈이 다시 낸 돈 아래로 내려가면, 다시 채울 때까지는 벌금이 없어요. OB·벙커·해저드·퍼트는 📝 상세 기록에 입력한 값으로 판정합니다. ' : '') +
+          // 가입 기준 금액에 따라 글이 달라지지 않게 두 경우를 함께 적는다 (아래 설명 참고: 금액 칸은 입력할 때 화면을 다시 그리지 않는다)
+          (sk.oecd ? '상금으로 받은 돈(낸 벌금은 뺌)이 <b>가입 기준</b> 이상이 된 사람(OECD 가입)이 그다음 홀부터 <b>OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상</b>을 하면 항목마다 벌금을 공금에 넣어요. 벌금을 내서 가입 기준 아래로 내려가면, 다시 채울 때까지는 벌금이 없어요. 가입 기준을 0으로 두면 본전 기준이에요: 공금에서 받은 돈(시작 지급 포함)이 낸 돈 이상일 때 가입해요. OB·벙커·해저드·퍼트는 📝 상세 기록에 입력한 값으로 판정합니다. ' : '') +
           '끝나면 남은 공금으로 캐디피를 내고, 모자라면 똑같이 나눠 내요. 홀마다 돈을 나눠 주지 않아도 리더보드에 누가 얼마를 가져갔는지 쌓이고, 끝나고 한 번에 나누면 됩니다. ' +
           // 이 글은 입력한 금액에 따라 바뀌지 않게 둔다 (금액 칸은 입력할 때 화면을 다시 그리지 않아, 금액을 따지는 글은 옛 내용으로 남는다)
           (sk.collect ? '<b>미리 걷음</b>: 정산은 걷어 둔 돈에서 누구에게 얼마를 줄지로 나와요. 걷은 돈(각자 내는 돈 × 인원)이 시작할 때 나눠 준 돈보다 많지 않으면 걷지 않은 것으로 정리해요.'
@@ -1599,11 +1607,18 @@
     return html;
   }
 
+  /** 리더보드의 게임별 룰 설명 한 줄. text는 앱이 만든 글(금액은 won()으로)만 넣는다 */
+  function ruleLine(text) { return '<div class="rule"><b>룰</b>' + text + '</div>'; }
+
   function tabStroke(r, all) {
     var res = G.strokePlay(r, { net: state.boardNet, unit: r.games.stroke.unit });
     var hasHcp = r.players.some(function (p) { return p.hcp > 0; });
     var me = myPid();
-    var html = '<div class="card"><h2>순위' + (hasHcp ? '<span class="hint">' + seg('boardNet', state.boardNet, [[false, '그로스'], [true, '네트']]) + '</span>' : '') + '</h2>';
+    var sg = r.games.stroke;
+    var html = '<div class="card"><h2>순위' + (hasHcp ? '<span class="hint">' + seg('boardNet', state.boardNet, [[false, '그로스'], [true, '네트']]) + '</span>' : '') + '</h2>' +
+      ruleLine('스트로크 플레이: 파 대비 타수(±파)가 낮을수록 순위가 높아요.' + (hasHcp ? ' 네트는 핸디를 뺀 타수예요.' : '') +
+        (sg.cap ? ' 양파 한도: 한 홀은 파의 두 배까지만 세요.' : '') +
+        (sg.unit > 0 ? ' 내기는 전원이 친 홀의 ' + (sg.net ? '네트 ' : '') + '타수 차 × 타당 ' + won(sg.unit) + '을 둘씩 주고받아요.' : ''));
     html += '<table><thead><tr><th></th><th class="l">플레이어</th><th>홀</th><th>타수</th><th>±파</th>' + (hasHcp ? '<th>네트</th>' : '') + '</tr></thead><tbody>';
     res.rows.forEach(function (p) {
       html += '<tr class="' + (me === p.id ? 'me' : '') + '"><td>' + (p.rank ? '<span class="rank r' + p.rank + '">' + p.rank + '</span>' : '') + '</td><td class="l">' + badge(p.team) + ' ' + esc(p.name) + (p.hcp ? ' <span class="muted small">H' + esc(p.hcp) + '</span>' : '') + '</td>' +
@@ -1622,7 +1637,8 @@
 
   function tabStableford(r, all) {
     var res = all.stableford, me = myPid();
-    var html = '<div class="card"><h2>스테이블포드 <span class="hint">' + (res.net ? '네트' : '그로스') + ' · 높을수록 좋음</span></h2><table><thead><tr><th></th><th class="l">플레이어</th><th>점수</th></tr></thead><tbody>';
+    var html = '<div class="card"><h2>스테이블포드 <span class="hint">' + (res.net ? '네트' : '그로스') + ' · 높을수록 좋음</span></h2>' +
+      ruleLine('홀마다 점수를 받아 합계가 높은 사람이 이겨요: 버디 3 · 파 2 · 보기 1 · 더블보기 이상 0 (이글 4 · 알바트로스 5).' + (res.net ? ' 핸디를 뺀 타수로 계산해요.' : '') + ' 돈은 걸지 않아요.') + '<table><thead><tr><th></th><th class="l">플레이어</th><th>점수</th></tr></thead><tbody>';
     res.rows.forEach(function (p) {
       html += '<tr class="' + (me === p.id ? 'me' : '') + '"><td><span class="rank r' + p.rank + '">' + p.rank + '</span></td><td class="l">' + badge(p.team) + ' ' + esc(p.name) + '</td><td><b style="font-size:18px">' + p.points + '</b></td></tr>';
     });
@@ -1641,15 +1657,21 @@
     // 방식 설명은 제목 아래 한 줄로 (제목 줄에 넣으면 좁은 화면에서 글자가 꺾인다)
     var sub = '<div class="muted small" style="margin:-4px 0 8px">' + (team ? '팀' : '개인') + (res.net ? ' · 네트' : '') +
       (f ? ' · 공금: 각자 ' + won(f.stake) + ' · 홀당 상금 ' + won(f.prize) + (f.oecd ? ' · OECD 벌금 ' + won(f.fine) : '') : (res.unit ? ' · 스킨당 ' + won(res.unit) : '')) + '</div>';
-    if (res.error) return '<div class="card">' + head + sub + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 팀을 지정하세요.');
+    // OECD 가입 조건: 가입 기준이 있으면 상금(벌금을 뺀 금액)이 그 금액 이상, 없으면(예전 라운드) 공금에서 받은 돈이 낸 돈 이상
+    var joinWho = f && f.join > 0 ? '상금을 ' + won(f.join) + ' 이상 받은 사람' : '공금에서 받은 돈이 낸 돈 이상이 된 사람';
+    var rule = ruleLine('홀마다 혼자 가장 적게 친 ' + (team ? '팀' : '사람') + '이 스킨을 가져가고, 동타면 다음 홀로 이월돼요.' +
+      (team ? ' 팀은 그 홀에서 가장 잘 친 한 명의 타수로 겨뤄요.' : '') +
+      (f ? ' 스킨 하나의 상금은 ' + won(f.prize) + '이에요(공금에서).' + (f.oecd ? ' ' + joinWho + '은 OECD 가입: 그다음 홀부터 OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상마다 벌금 ' + won(f.fine) + '을 공금에 넣어요.' : '')
+        : res.unit ? ' 스킨 하나에 ' + (team ? '진 팀 각자가 ' + won(res.unit) + '을 내요.' : '다른 사람 각각이 ' + won(res.unit) + '을 줘요.') : ''));
+    if (res.error) return '<div class="card">' + head + sub + rule + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 팀을 지정하세요.');
     // done: 모든 홀을 입력함. over: 라운드가 끝남(기록으로 보는 중이거나 종료됨). 덜 치고 끝낸 라운드는 over이지만 done은 아니다
     var done = holesDone(r) === r.holes, over = !!state.readOnly || r.status === 'finished';
-    var html = '<div class="card">' + head + sub + '<table' + (f ? ' class="fund"' : '') + '><thead><tr><th class="l">' + (team ? '팀' : '플레이어') + '</th><th>스킨</th><th>' + (f ? '받은 돈' : '금액') + '</th>' + (f ? '<th>최종</th>' : '') + '</tr></thead><tbody>';
+    // 공금 방식의 표에는 받은 돈까지만 적는다. 낸 돈과 남는 돈까지 넣은 손익은 💰 정산 탭에, 끝나고 실제로 나눌 돈은 아래 공금 장부에 있다
+    var html = '<div class="card">' + head + sub + rule + '<table' + (f ? ' class="fund"' : '') + '><thead><tr><th class="l">' + (team ? '팀' : '플레이어') + '</th><th>스킨</th><th>' + (f ? '받은 돈' : '금액') + '</th></tr></thead><tbody>';
     if (f) {
       res.entrants.forEach(function (e) {
         html += '<tr><td class="l"><b>' + esc(e.name) + '</b>' + (e.oecd ? '<span class="oecd">OECD</span>' : '') + '</td><td><b style="font-size:18px">' + e.skins + '</b></td>' +
-          '<td>' + won(e.take) + (e.fines ? '<div class="muted small">벌금 −' + won(e.fines) + '</div>' : '') + '</td>' +
-          '<td class="' + (e.final > 0 ? 'pos' : e.final < 0 ? 'neg' : '') + '">' + (res.enabled ? signedWon(e.final) : '<span class="muted">-</span>') + '</td></tr>';
+          '<td>' + won(e.take) + (e.fines ? '<div class="muted small">벌금 −' + won(e.fines) + '</div>' : '') + '</td></tr>';
       });
     } else {
       var money = {};
@@ -1660,7 +1682,7 @@
       });
     }
     html += '</tbody></table>' + (res.carry ? '<div class="notice" style="margin-top:10px">' + (done || over ? (done ? '마지막 홀까지 이월된 ' : '이월된 채 끝난 ') + res.carry + '스킨' + (f ? '의 상금은 공금에 남아요' : '은 정산에 포함되지 않습니다') : '현재 ' + res.carry + '스킨 이월 중 — 다음 홀 단독 승자가 가져갑니다') + '</div>' : '') +
-      (f ? '<div class="muted small" style="margin-top:8px">받은 돈 = 시작 지급 + 상금 − 벌금. 최종 = 받은 돈 − 낸 돈 ' + won(f.stake) + (f.rest >= 0 ? ' + 남는 돈의 1/' + f.players : ' − 모자란 돈의 1/' + f.players) + ' (공금 장부의 ' + (f.rest >= 0 ? '"남는 돈"' : '"모자란 돈"') + ').</div>' : '') + '</div>';
+      (f ? '<div class="muted small" style="margin-top:8px">받은 돈 = 시작 지급 + 상금 − 벌금.</div>' : '') + '</div>';
     if (f) html += fundCard(r, res, done, over, all.settlement.payments.some(function (p) { return !p.fixed; }));
     html += '<div class="card"><h2>홀별 결과</h2><div class="skinlist">' + res.holes.map(function (h) {
       var cls = h.winner ? 'won' : (h.played && h.tie) ? 'carry' : '';
@@ -1674,7 +1696,10 @@
       res.holes.forEach(function (h) { (h.oecd || []).forEach(function (o) { pens.push('<div class="kv"><span class="k">' + (h.hole + 1) + '번홀</span><span><b>' + esc(o.name) + '</b> ' + o.labels.join(' · ') + ' → 벌금 ' + won(o.fine) + '</span></div>'); }); });
       html += '<div class="card"><h2>OECD 벌금</h2>' +
         (pens.length ? '<div class="stack">' + pens.join('') + '</div>' : '<div class="muted">아직 벌금이 없어요.</div>') +
-        '<div class="muted small" style="margin-top:8px">공금에서 받은 돈이 낸 돈(' + won(f.stake) + ') 이상이 된 사람부터, 그다음 홀에서 OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상을 하면 항목마다 ' + won(f.fine) + '을 공금에 넣어요. 벌금을 내서 받은 돈이 다시 ' + won(f.stake) + ' 아래로 내려가면, 다시 채울 때까지는 벌금이 없어요. OB·벙커·해저드·퍼트는 📝 상세 기록에 입력한 값으로 판정합니다.</div></div>';
+        '<div class="muted small" style="margin-top:8px">' + (f.join > 0
+          ? '상금으로 받은 돈(낸 벌금은 뺌)이 ' + won(f.join) + ' 이상이 된 사람부터, 그다음 홀에서 OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상을 하면 항목마다 ' + won(f.fine) + '을 공금에 넣어요. 벌금을 내서 다시 ' + won(f.join) + ' 아래로 내려가면, 다시 채울 때까지는 벌금이 없어요.'
+          : '공금에서 받은 돈이 낸 돈(' + won(f.stake) + ') 이상이 된 사람부터, 그다음 홀에서 OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상을 하면 항목마다 ' + won(f.fine) + '을 공금에 넣어요. 벌금을 내서 받은 돈이 다시 ' + won(f.stake) + ' 아래로 내려가면, 다시 채울 때까지는 벌금이 없어요.') +
+        ' OB·벙커·해저드·퍼트는 📝 상세 기록에 입력한 값으로 판정합니다.</div></div>';
     }
     return html;
   }
@@ -1762,8 +1787,13 @@
   function tabOjang(r, all) {
     var res = all.ojang;
     var head = '<h2>오장 ' + moneyChip('ojang', res.enabled, !!res.error) + '<span class="hint">타당 ' + won(res.unit) + (res.net ? ' · 네트' : '') + '</span></h2>';
-    if (res.error) return '<div class="card">' + head + '<div class="muted">' + esc(res.error) + '</div></div>';
-    var html = '<div class="card">' + head + '<table><thead><tr><th class="l">플레이어</th><th>금액</th></tr></thead><tbody>' +
+    var og = r.games.ojang || {}, ojCarry = og.carry !== false, ojNear = og.near !== false, ojBirdie = og.birdie !== false;
+    var rule = ruleLine('홀마다 ' + (res.net ? '핸디를 뺀 ' : '') + '타수 차 × 타당 ' + won(res.unit) + '을 둘씩 주고받아요. 배판인 홀은 2배예요: 버디 이하 · 트리플 이상 · 파3 더블 이상 · 3명 이상 동타' + (ojCarry ? ' · 앞 홀 전원 동타' : '') + '.' +
+      (ojNear && ojBirdie ? ' 파3 니어(파 이하로 마쳤을 때)와 버디 이하는 다른 사람 각각에게서 1타 금액을 더 받아요.'
+        : ojNear ? ' 파3 니어는 파 이하로 마치면 다른 사람 각각에게서 1타 금액을 더 받아요.'
+          : ojBirdie ? ' 버디 이하는 다른 사람 각각에게서 1타 금액을 더 받아요.' : ''));
+    if (res.error) return '<div class="card">' + head + rule + '<div class="muted">' + esc(res.error) + '</div></div>';
+    var html = '<div class="card">' + head + rule + '<table><thead><tr><th class="l">플레이어</th><th>금액</th></tr></thead><tbody>' +
       res.rows.map(function (x) {
         return '<tr><td class="l"><b>' + esc(x.name) + '</b></td><td class="' + (x.amount > 0 ? 'pos' : x.amount < 0 ? 'neg' : '') + '">' + (res.unit ? signedWon(x.amount) : '<span class="muted">-</span>') + '</td></tr>';
       }).join('') + '</tbody></table>' +
@@ -1771,7 +1801,7 @@
         var pend = res.holes.filter(function (h) { return h.pendingDouble; }).map(function (h) { return (h.hole + 1) + '번홀'; });
         return pend.length ? '<div class="notice" style="margin-top:10px">앞 홀이 전원 동타라 ' + pend.join(', ') + '은 배판이에요</div>' : '';
       })() +
-      '<div class="muted small" style="margin-top:8px">홀마다 타수 차 × 타당 금액을 둘씩 주고받아요. 전원이 타수를 넣은 홀만 계산합니다.</div></div>';
+      '<div class="muted small" style="margin-top:8px">전원이 타수를 넣은 홀만 계산합니다.</div></div>';
     html += '<div class="card"><h2>홀별 판 <span class="hint">배판 ' + res.doubles + '홀</span></h2><div class="skinlist">' + res.holes.map(function (h) {
       return '<div class="' + (h.played ? (h.mult === 2 ? 'carry' : 'won') : '') + '">' + (h.hole + 1) + '홀<b>' + (h.played ? (h.mult === 2 ? '배판' : '민판') : '-') + '</b></div>';
     }).join('') + '</div>' + (r.games.ojang && r.games.ojang.carry === false ? '' : startNote(r, '"앞 홀 전원 동타" 배판은')) + '</div>';
@@ -1800,8 +1830,12 @@
   function tabMatch(r, all) {
     var res = all.match;
     var head = '<h2>매치 플레이 ' + moneyChip('match', res.enabled, !!res.error) + '<span class="hint">' + (r.games.match.mode === 'team' ? '팀' : '개인 리그') + (res.unit ? ' · 홀당 ' + won(res.unit) : '') + (res.net ? ' · 네트' : '') + '</span></h2>';
-    if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 2팀을 지정하세요.');
-    return '<div class="card">' + head + '<div class="stack">' +
+    var mteam = r.games.match.mode === 'team';
+    var rule = ruleLine('홀마다 ' + (res.net ? '핸디를 뺀 ' : '') + '타수가 적은 쪽이 그 홀을 이기고, 이긴 홀이 많은 쪽이 매치를 이겨요.' +
+      (mteam ? ' 팀은 그 홀에서 가장 잘 친 한 명의 타수로 겨뤄요.' : ' 개인 리그: 모든 사람이 서로 한 번씩 겨뤄요.') +
+      (res.unit ? ' 매치가 끝나면 진 ' + (mteam ? '팀 각자가 홀 차 × ' + won(res.unit) + '을 내요.' : '사람이 홀 차 × ' + won(res.unit) + '을 줘요.') : ''));
+    if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 2팀을 지정하세요.');
+    return '<div class="card">' + head + rule + '<div class="stack">' +
       res.matches.map(function (m) { return matchBox(m, m.status, m.money && res.enabled ? won(m.money) : null); }).join('') +
       '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. 금액은 매치 종료 시 홀 차 × 단가로 확정됩니다.</div></div>';
   }
@@ -1809,8 +1843,12 @@
   function tabNassau(r, all) {
     var res = all.nassau;
     var head = '<h2>나소 ' + moneyChip('nassau', res.enabled, !!res.error) + '<span class="hint">' + (r.games.nassau.mode === 'team' ? '팀' : '개인') + (res.unit ? ' · 판당 ' + won(res.unit) : '') + '</span></h2>';
-    if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '.');
-    return '<div class="card">' + head + '</div>' + res.matches.map(function (m) {
+    var nteam = r.games.nassau.mode === 'team';
+    var rule = ruleLine('18홀을 전반 9홀 · 후반 9홀 · 전체 18홀의 세 판으로 나눠, 판마다 매치 플레이(홀마다 ' + (res.net ? '핸디를 뺀 ' : '') + '타수가 적은 쪽이 승)로 겨뤄요.' +
+      (nteam ? ' 팀은 그 홀에서 가장 잘 친 한 명의 타수로 겨뤄요.' : '') +
+      (res.unit ? ' 판을 이기면 진 ' + (nteam ? '팀 각자에게서' : '사람에게서') + ' 판당 ' + won(res.unit) + '을 받아요. 비긴 판은 주고받지 않아요.' : ''));
+    if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '.');
+    return '<div class="card">' + head + rule + '</div>' + res.matches.map(function (m) {
       return '<div class="card"><h2>' + esc(m.a.name) + ' vs ' + esc(m.b.name) + '</h2><div class="stack">' +
         m.segments.map(function (s) { return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div>' + matchBox(m, s.status, s.money && res.enabled ? won(s.money) : null); }).join('') + '</div></div>';
     }).join('');
@@ -1819,8 +1857,10 @@
   function tabBestball(r, all) {
     var res = all.bestball;
     var head = '<h2>베스트볼 ' + moneyChip('bestball', res.enabled, !!res.error) + '<span class="hint">베스트 ' + res.count + (res.net ? ' · 네트' : '') + (res.unit ? ' · 홀당 ' + won(res.unit) : '') + '</span></h2>';
-    if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '.');
-    var html = '<div class="card">' + head + '<table><thead><tr><th class="l">팀</th><th>팀 타수</th><th>±파</th><th>홀 승</th></tr></thead><tbody>';
+    var rule = ruleLine('팀에서 그 홀을 가장 잘 친 ' + (res.count > 1 ? res.count + '명의 ' + (res.net ? '핸디를 뺀 ' : '') + '타수 합이' : '한 명의 ' + (res.net ? '핸디를 뺀 ' : '') + '타수가') + ' 팀 점수예요. 팀 점수가 혼자 가장 낮은 팀이 그 홀을 이겨요.' +
+      (res.unit ? ' 홀마다 진 팀 각자가 ' + won(res.unit) + '을 내고 이긴 팀이 나눠 가져요.' : ''));
+    if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '.');
+    var html = '<div class="card">' + head + rule + '<table><thead><tr><th class="l">팀</th><th>팀 타수</th><th>±파</th><th>홀 승</th></tr></thead><tbody>';
     res.teams.forEach(function (t) {
       html += '<tr><td class="l">' + badge(t.id) + ' <span class="muted small">' + t.pids.map(function (pid) { return esc(nameOf(r, pid)); }).join(', ') + '</span></td><td><b>' + t.total + '</b></td><td class="' + tpClass(t.toPar) + '"><b>' + G.fmtToPar(t.toPar) + '</b></td><td>' + t.holesWon + '</td></tr>';
     });
@@ -1840,8 +1880,10 @@
   function tabVegas(r, all) {
     var res = all.vegas;
     var head = '<h2>라스베가스 ' + moneyChip('vegas', res.enabled, !!res.error) + '<span class="hint">' + (res.unit ? '점당 ' + won(res.unit) : '') + '</span></h2>';
-    if (res.error) return '<div class="card">' + head + '</div>' + teamHint(res.error + '.');
-    var html = '<div class="card">' + head + '<div class="row" style="justify-content:space-around;text-align:center">' +
+    var rule = ruleLine('2명씩 두 팀이 겨뤄요. 홀마다 팀 두 사람의 ' + (r.games.vegas.net ? '핸디를 뺀 ' : '') + '타수를 작은 수부터 붙여 두 자리 수를 만들고(4타와 5타면 45), 숫자가 작은 팀이 그 차이만큼 점수를 얻어요. 상대 팀만 버디 이하를 하면 우리 숫자가 뒤집혀요(45가 54로).' +
+      (res.unit ? ' 1점에 진 팀 각자가 ' + won(res.unit) + '을 내고 이긴 팀이 나눠 가져요.' : ''));
+    if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '.');
+    var html = '<div class="card">' + head + rule + '<div class="row" style="justify-content:space-around;text-align:center">' +
       res.teams.map(function (t, i) {
         var m = (t.points - res.teams[1 - i].points) * res.unit;
         return '<div>' + badge(t.id) + '<div class="small muted">' + t.pids.map(function (pid) { return esc(nameOf(r, pid)); }).join(' · ') + '</div><div style="font-size:30px;font-weight:800">' + t.points + '</div>' +
@@ -1896,6 +1938,8 @@
       return '<button class="chip sm ' + (en[type] ? 'active' : '') + '" data-action="toggle-bonus" data-type="' + type + '">' + label + (en[type] ? ' ₩' : '') + '</button>';
     };
     var html = '<div class="card"><h2>보너스 <span class="hint">1회당 ' + won(g.unit) + '</span></h2>' +
+      ruleLine('니어리스트 · 롱기스트 · 버디를 한 사람이 다른 사람 각각에게서 1회당 ' + won(g.unit) + '을 받아요. 이글 이상은 2배예요.' +
+        (res.rules.eraser ? ' 지우개: 파3에서 그린에 못 올린 사람이 파 이하로 마치면 그 홀의 니어를 지워요.' : '')) +
       '<div class="chips" style="margin-bottom:10px">' + chip('nearest', '니어리스트') + chip('longest', '롱기스트') + chip('birdie', '버디/이글') + '</div>' +
       '<table class="bonus"><thead><tr><th class="l">플레이어</th><th>니어</th><th>롱기</th><th>버디</th><th>이글+</th>' + (anyMoney ? '<th>금액</th>' : '') + '</tr></thead><tbody>';
     r.players.forEach(function (p) {

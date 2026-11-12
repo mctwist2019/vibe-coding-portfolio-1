@@ -301,8 +301,10 @@
    *  (나) 공금(펀드) (opt.fund, 개인전에서만): 각자 opt.stake를 낸 것으로 치고 그 합이 공금이다.
    *      시작할 때 공금에서 플레이어 각각에게 opt.start, 캐디에게 opt.tip을 준다.
    *      홀 상금 opt.prize(이월분 포함)를 공금에서 승자에게 준다.
-   *      OECD 룰(opt.oecd): 공금에서 받은 돈(시작 지급 + 상금 − 벌금)이 낸 돈 이상인 사람(본전을 찾은 사람)은 'OECD 가입자'가 되고,
-   *      가입한 채로 시작한 홀에서 벌칙 항목에 걸리면 항목마다 opt.fine을 공금에 넣는다 (받은 돈 이상은 내지 않는다).
+   *      OECD 룰(opt.oecd): 상금으로 받은 돈에서 낸 벌금을 뺀 금액이 가입 기준(opt.join, 새 라운드는 6만 원) 이상인 사람은 'OECD 가입자'가 되고,
+   *      가입한 채로 시작한 홀에서 벌칙 항목에 걸리면 항목마다 opt.fine을 공금에 넣는다 (가진 돈 이상은 내지 않는다).
+   *      벌금을 내서 기준 아래로 내려가면 다시 채울 때까지는 가입자가 아니다. 시작 지급은 이 금액에 넣지 않는다.
+   *      opt.join이 0이거나 없으면(가입 기준이 생기기 전에 만든 라운드) 예전 기준 그대로다: 공금에서 받은 돈(시작 지급 + 상금 − 벌금)이 낸 돈 이상인 사람(본전을 찾은 사람).
    *      끝나면 공금에 남은 돈으로 캐디피(opt.caddie)를 내고, 모자라면 전원이 똑같이 나눠 내며 남으면 똑같이 돌려받는다.
    *      마지막까지 이월된 스킨의 상금은 공금에 남는다.
    *      사람별 최종 금액 = 시작 지급 + 상금 − 벌금 − 낸 돈 + (남은 돈 − 캐디피) ÷ 인원 (원 단위로 나눈다). 실제로 돈을 미리 걷을 필요는 없다:
@@ -318,7 +320,7 @@
     var ents = entrantsFor(round, opt.mode);
     var fundOn = !!opt.fund && opt.mode !== 'team';
     var stake = wonAmount(opt.stake), prize = wonAmount(opt.prize), caddie = wonAmount(opt.caddie), fine = wonAmount(opt.fine);
-    var start = wonAmount(opt.start), tip = wonAmount(opt.tip);
+    var start = wonAmount(opt.start), tip = wonAmount(opt.tip), join = wonAmount(opt.join);
     var oecd = fundOn && !!opt.oecd;
     // 공금을 실제로 걷고 시작 지급도 이미 한 경우: 남은 송금은 걷어 둔 돈에서 나눠 주는 것이 된다.
     // 걷은 돈이 시작 지급보다 많을 때만 뜻이 있다. 각자 내는 돈이 0이거나 시작 지급보다 적으면 걷어 둔 돈이 없으므로 '안 걷음'으로 계산한다
@@ -333,7 +335,8 @@
     var allPids = [];
     ents.forEach(function (e) { allPids = allPids.concat(e.pids); });
     function held(e) { return start + got[e.id] - fined[e.id]; } // 공금에서 받아 지금 가지고 있는 돈
-    function isMember(e) { return oecd && stake > 0 && held(e) >= stake; }
+    // OECD 가입: 가입 기준이 있으면 상금 − 벌금이 그 금액 이상, 없으면(예전 라운드) 공금에서 받은 돈이 낸 돈 이상
+    function isMember(e) { return oecd && (join > 0 ? got[e.id] - fined[e.id] >= join : stake > 0 && held(e) >= stake); }
 
     for (var oi = 0; oi < order.length; oi++) {
       var h = order[oi];
@@ -345,7 +348,7 @@
       var min = Math.min.apply(null, scores);
       var winners = [];
       scores.forEach(function (s, i) { if (s === min) winners.push(i); });
-      // 이 홀을 시작할 때의 OECD 가입자 (이 홀의 상금으로 본전을 찾은 사람은 다음 홀부터)
+      // 이 홀을 시작할 때의 OECD 가입자 (이 홀의 상금으로 기준을 채운 사람은 다음 홀부터)
       var members = ents.filter(isMember);
       carry += 1;
       var rec;
@@ -391,7 +394,7 @@
     // 나누어떨어지지 않으면 원 단위로 나눈다: 몫은 내림, 남는 1원들은 앞 사람부터 하나씩. 그래야 사람별 금액의 합이 정확히 맞고
     // 캐디에게 가는 송금 합계가 캐디 몫과 1원도 어긋나지 않는다 (3명이 160,000원을 나누면 53,334 · 53,333 · 53,333)
     var base = Math.floor(rest / n), extra = rest - base * n;
-    res.fund = { stake: stake, prize: prize, start: start, tip: tip, caddie: caddie, fine: fine, oecd: oecd, players: n,
+    res.fund = { stake: stake, prize: prize, start: start, tip: tip, caddie: caddie, fine: fine, oecd: oecd, join: join, players: n,
       total: total, startOut: startOut, paid: paid, fines: fines, left: left, rest: rest, share: share, even: extra === 0, caddieTotal: tip + caddie,
       // 끝나고 실제로 오갈 돈: 미리 걷었으면 봉투에 남은 돈(공금 − 시작 지급)에서 나눠 주고 캐디에게는 캐디피만, 안 걷었으면 처음부터 전부
       collect: collect, cash: collect ? total - startOut : 0, caddieDue: collect ? caddie : tip + caddie };
@@ -863,7 +866,7 @@
   }
 
   return {
-    BUILD: 13, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 14, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     defaultStrokeIndex: defaultStrokeIndex,
     defaultPars: defaultPars,
     strokesPerHole: strokesPerHole,

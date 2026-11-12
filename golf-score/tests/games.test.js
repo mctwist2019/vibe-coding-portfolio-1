@@ -239,7 +239,7 @@ test('skins fund: stakes make the fund, start hand-outs and hole prizes come out
   // a wins holes 1 and 2, hole 3 is tied, b wins hole 4 with the carried skin
   const r = oecdRound({ a: [3, 3, 4, 5], b: [4, 4, 4, 4], c: [4, 4, 4, 5], d: [5, 5, 5, 5] });
   const res = G.skins(r, FUND);
-  assert.deepEqual(res.fund, { stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, fine: 10000, oecd: false, players: 4,
+  assert.deepEqual(res.fund, { stake: 100000, prize: 20000, start: 10000, tip: 10000, caddie: 150000, fine: 10000, oecd: false, join: 0, players: 4,
     total: 400000, startOut: 50000, paid: 80000, fines: 0, left: 270000, rest: 120000, share: 30000, even: true, caddieTotal: 160000, collect: false, cash: 0, caddieDue: 160000 });
   assert.deepEqual(skinsOf(res), { a: 2, b: 2, c: 0, d: 0 });
   assert.equal(res.holes[3].amount, 40000, 'a carried skin doubles the prize');
@@ -316,6 +316,78 @@ test('skins fund OECD: a player who has the stake back pays a fine into the fund
   assert.ok(off.holes.every((h) => !h.oecd)); assert.equal(off.fund.fines, 0);
   // 벌금 0원이면 걸려도 낼 것이 없다
   assert.equal(G.skins(r, Object.assign({ oecd: true }, FUND, { fine: 0 })).fund.fines, 0);
+});
+
+test('skins fund OECD with a joining amount: prize money of 60,000 (start hand-out not counted) makes a member from the next hole', () => {
+  // a wins holes 1-3 (60,000 in prizes). Faults: hole 3 OB (not yet a member), hole 4 OB + bunker, hole 5 hazard, hole 6 3-putt
+  const r = oecdRound({ a: [3, 3, 3, 5, 5, 3, 5], b: [4, 4, 4, 4, 4, 4, 4], c: [4, 4, 4, 5, 5, 4, 5], d: [5, 5, 5, 5, 5, 5, 5] },
+    { a: { 2: { ob: 1 }, 3: { ob: 1, bk: 1 }, 4: { hz: 1 }, 5: { pt: 3 }, 6: { ob: 1 } }, b: { 3: { ob: 1 }, 4: { ob: 1 } } });
+  const res = G.skins(r, Object.assign({ oecd: true, join: 60000 }, FUND));
+  assert.equal(res.fund.join, 60000);
+  assert.equal(res.holes[1].oecd, undefined);
+  assert.equal(res.holes[2].oecd, undefined, 'the hole on which the amount is reached is still free (40,000 before it)');
+  assert.deepEqual(res.holes[3].oecd, [{ id: 'a', name: 'A', faults: ['ob', 'bk'], labels: ['OB', '벙커'], fine: 20000 }], 'member from the next hole: 60,000 in prizes, although 70,000 is still below the stake');
+  // 벌금 2만을 내서 상금 − 벌금이 4만이 됐다 → 5번홀의 해저드는 벌금이 없다 (b는 4·5번홀을 이겼지만 그 홀들을 시작할 때는 0원·2만이라 OB에 벌금이 없다)
+  assert.equal(res.holes[4].oecd, undefined, 'below the amount again after the fine: no fine until it is filled again');
+  assert.equal(res.holes[4].winner, 'b');
+  // 6번홀: a가 이겨 다시 6만 → 그 홀의 3퍼트는 아직 벌금이 없고, 7번홀의 OB부터 벌금
+  assert.equal(res.holes[5].winner, 'a'); assert.equal(res.holes[5].oecd, undefined);
+  assert.deepEqual(res.holes[6].oecd, [{ id: 'a', name: 'A', faults: ['ob'], labels: ['OB'], fine: 10000 }]);
+  const e = Object.fromEntries(res.entrants.map((x) => [x.id, x]));
+  assert.deepEqual([e.a.prize, e.a.fines, e.a.take, e.a.oecd], [80000, 30000, 60000, false], 'take includes the start hand-out; membership looks at prize − fines = 50,000');
+  assert.equal(res.holes[6].winner, 'b');
+  assert.deepEqual([e.b.prize, e.b.fines, e.b.oecd], [60000, 0, true], 'b reaches 60,000 on the last hole played: a member from the next hole on');
+  assert.deepEqual([res.fund.paid, res.fund.fines], [140000, 30000]);
+  // 가입 기준이 없으면(예전 라운드) 본전 기준 그대로: a는 가진 돈이 10만에 못 미쳐 한 번도 가입하지 않는다
+  const old = G.skins(r, Object.assign({ oecd: true }, FUND));
+  assert.equal(old.fund.join, 0); assert.equal(old.fund.fines, 0); assert.ok(old.holes.every((h) => !h.oecd));
+  assert.equal(G.skins(r, Object.assign({ oecd: true, join: 0 }, FUND)).fund.fines, 0, 'join 0 is the old rule');
+  assert.equal(G.skins(r, Object.assign({ oecd: true, join: 'x' }, FUND)).fund.fines, 0, 'a value that is not an amount is the old rule');
+  // OECD를 끄면 가입 기준이 있어도 벌금이 없다
+  assert.equal(G.skins(r, Object.assign({ join: 60000 }, FUND)).fund.fines, 0);
+});
+
+test('skins fund OECD with a joining amount: exactly the amount joins, one won below does not; the start hand-out and the stake do not matter', () => {
+  const r = oecdRound({ a: [3, 3, 3, 5], b: [4, 4, 4, 4], c: [4, 4, 4, 5] }, { a: { 3: { ob: 1 } } });
+  const fineOf = (opt) => G.skins(r, Object.assign({ oecd: true }, FUND, opt)).fund.fines;
+  assert.equal(fineOf({ join: 60000 }), 10000);
+  assert.equal(fineOf({ join: 60001 }), 0);
+  assert.equal(fineOf({ join: 59999 }), 10000);
+  assert.equal(fineOf({ join: 60000, start: 0 }), 10000, 'the start hand-out is not part of the amount');
+  assert.equal(fineOf({ join: 60000, start: 50000 }), 10000);
+  assert.equal(fineOf({ join: 70000, start: 50000 }), 0, 'a large start hand-out does not make a member');
+  assert.equal(fineOf({ join: 60000, stake: 0, caddie: 0, tip: 0, start: 0 }), 10000, 'the stake does not matter either');
+  assert.equal(fineOf({ join: 60000, prize: 10000 }), 0, 'three skins at 10,000 are 30,000');
+  // 가진 돈보다 많이 내지 않는다: 벌금 50만이어도 시작 지급 + 상금 = 7만까지만
+  assert.equal(fineOf({ join: 60000, fine: 500000 }), 70000);
+  // 이월된 스킨은 상금도 여러 배다: 두 홀 동타 뒤 한 번 이기면 6만
+  const r2 = oecdRound({ a: [4, 4, 3, 5], b: [4, 4, 4, 4], c: [4, 4, 4, 5] }, { a: { 3: { hz: 1 } } });
+  const res2 = G.skins(r2, Object.assign({ oecd: true, join: 60000 }, FUND));
+  assert.equal(res2.holes[2].amount, 60000);
+  assert.deepEqual(res2.holes[3].oecd.map((o) => [o.id, o.fine]), [['a', 10000]]);
+  // 팀전은 공금 방식이 아니므로 가입 기준이 있어도 벌금이 없다
+  const tr = mkRound([{ id: 'a', name: 'A', hcp: 0, team: 'A' }, { id: 'b', name: 'B', hcp: 0, team: 'B' }], { a: [3, 3, 3, 5].concat(Array(14).fill(null)), b: [4, 4, 4, 4].concat(Array(14).fill(null)) }, { pars: Array(18).fill(4), stats: { a: { 3: { ob: 1 } } } });
+  const tres = G.skins(tr, Object.assign({}, FUND, { mode: 'team', unit: 1000, oecd: true, join: 60000 }));
+  assert.equal(tres.fund, null); assert.ok(tres.holes.every((h) => !h.oecd));
+});
+
+test('skins fund OECD with a joining amount follows the play order and goes through computeAll', () => {
+  // 10번홀 출발: 10~12번홀을 이겨 6만 → 그다음에 친 13번홀부터 벌금 대상. 1번홀의 OB는 18번홀까지 친 뒤라 벌금
+  const sc = { a: Array(18).fill(4), b: Array(18).fill(5), c: Array(18).fill(5) };
+  [9, 10, 11].forEach((h) => { sc.a[h] = 3; });
+  for (let h = 0; h < 18; h++) if (![9, 10, 11].includes(h)) { sc.a[h] = 5; }
+  const r = mkRound([{ id: 'a', name: 'A', hcp: 0, team: '' }, { id: 'b', name: 'B', hcp: 0, team: '' }, { id: 'c', name: 'C', hcp: 0, team: '' }], sc,
+    { pars: Array(18).fill(4), stats: { a: { 0: { ob: 1 }, 12: { bk: 1 } } } });
+  const back = [9, 10, 11, 12, 13, 14, 15, 16, 17, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+  const opt = Object.assign({ oecd: true, join: 60000 }, FUND);
+  const inOrder = G.skins(r, Object.assign({ order: back }, opt));
+  assert.deepEqual(inOrder.holes.filter((h) => h.oecd).map((h) => [h.hole, h.oecd[0].fine]), [[12, 10000]], 'hole 13 right after joining; the fine takes a below the amount, so hole 1 is free');
+  const natural = G.skins(r, opt);
+  assert.deepEqual(natural.holes.filter((h) => h.oecd).map((h) => h.hole), [12], 'in hole-number order hole 1 comes before joining');
+  r.games = { skins: Object.assign({ enabled: true, playorder: true }, opt) };
+  const all = G.computeAll(r, { order: back });
+  assert.equal(all.skins.fund.join, 60000); assert.equal(all.skins.fund.fines, 10000);
+  assert.equal(all.settlement.rows.reduce((t, x) => t + x.net, 0), -(all.skins.fund.caddieTotal));
 });
 
 test('skins fund OECD: a fine never exceeds what the player holds; ties and unplayed holes', () => {

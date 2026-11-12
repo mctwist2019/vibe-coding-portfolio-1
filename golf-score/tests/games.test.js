@@ -992,31 +992,54 @@ test('toParShort: the short names used in the hole-by-hole table', () => {
   }
 });
 
-test('match play in progress reports the amount at the current standing, but pays nothing until it ends', () => {
-  // 2홀을 마쳐 B팀이 1UP (1번홀 무, 2번홀 B승). 홀당 10,000원
+test('match play in progress pays at the current standing: holes up so far × unit', () => {
+  const nets = (res, r) => Object.fromEntries(G.settle(res.transfers, r.players).rows.map((x) => [x.id, x.net]));
+  // 2홀을 마쳐 B팀이 1UP (1번홀 무, 2번홀 B승). 홀당 10,000원: 진 팀 각자가 10,000원
   const r = mkRound(TEAM4, { a: [5, 5], b: [6, 6], c: [5, 4], d: [6, 5] });
-  const res = G.matchPlay(r, { unit: 10000, mode: 'team' });
-  const m = res.matches[0];
+  let res = G.matchPlay(r, { unit: 10000, mode: 'team' });
+  let m = res.matches[0];
   assert.equal(m.status.text, '1UP (2홀)');
   assert.equal(m.status.finished, false);
+  assert.equal(m.money, 10000);
   assert.equal(m.running, 10000);
-  assert.equal(m.money, 0);
-  assert.deepEqual(res.transfers, []);
-  // 2홀 차가 되면 20,000원, 동률이면 0
+  assert.deepEqual(nets(res, r), { a: -10000, b: -10000, c: 10000, d: 10000 });
+  // 2홀 차가 되면 20,000원
   r.scores.c[2] = 3; ['a', 'b', 'd'].forEach((id) => { r.scores[id][2] = 5; });
-  assert.equal(G.matchPlay(r, { unit: 10000, mode: 'team' }).matches[0].running, 20000);
+  res = G.matchPlay(r, { unit: 10000, mode: 'team' });
+  assert.equal(res.matches[0].running, 20000);
+  assert.deepEqual(nets(res, r), { a: -20000, b: -20000, c: 20000, d: 20000 });
+  // 뒤집히면 금액도 따라간다: A팀이 4~6번홀을 이겨 1UP
+  [3, 4, 5].forEach((h) => { r.scores.a[h] = 3; ['b', 'c', 'd'].forEach((id) => { r.scores[id][h] = 5; }); });
+  res = G.matchPlay(r, { unit: 10000, mode: 'team' });
+  assert.equal(res.matches[0].status.text, '1UP (6홀)');
+  assert.deepEqual(nets(res, r), { a: 10000, b: 10000, c: -10000, d: -10000 });
+  // 동률이면 주고받지 않는다
   const even = mkRound(TEAM4, { a: [5], b: [6], c: [5], d: [6] });
-  assert.equal(G.matchPlay(even, { unit: 10000, mode: 'team' }).matches[0].running, 0);
+  res = G.matchPlay(even, { unit: 10000, mode: 'team' });
+  assert.equal(res.matches[0].money, 0);
+  assert.equal(res.matches[0].running, 0);
+  assert.deepEqual(res.transfers, []);
   // 단가가 없으면 0
-  assert.equal(G.matchPlay(r, { mode: 'team' }).matches[0].running, 0);
-  // 끝난 매치: 진행 중 금액은 없고 확정 금액만 있다
+  res = G.matchPlay(r, { mode: 'team' });
+  assert.equal(res.matches[0].money, 0);
+  assert.deepEqual(res.transfers, []);
+  // 끝난 매치: 확정 금액 (전과 같다). running은 진행 중일 때만 있다
   const done = mkRound(TEAM4, { a: Array(9).fill(3), b: Array(9).fill(5), c: Array(9).fill(4), d: Array(9).fill(6) }, { holes: 9 });
   const dm = G.matchPlay(done, { unit: 10000, mode: 'team' });
   assert.equal(dm.matches[0].running, 0);
   assert.equal(dm.matches[0].money, 50000);
-  // 정산에는 진행 중 금액이 들어가지 않는다
-  const all = G.computeAll(Object.assign(r, { games: { match: { enabled: true, unit: 10000, mode: 'team' } } }));
-  assert.ok(all.settlement.rows.every((x) => x.net === 0));
+  assert.deepEqual(nets(dm, done), { a: 50000, b: 50000, c: -50000, d: -50000 });
+  // 개인 리그: 진행 중인 매치마다 지금까지의 홀 차
+  const ind = mkRound([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }], { a: [4, 4, 4], b: [5, 5, 4], c: [4, 5, 4] }, { holes: 9 });
+  res = G.matchPlay(ind, { unit: 1000, mode: 'individual' });
+  assert.deepEqual(res.matches.map((x) => x.status.text + ' ' + x.money), ['2UP (3홀) 2000', '1UP (3홀) 1000', '1UP (3홀) 1000']);
+  assert.deepEqual(nets(res, ind), { a: 3000, b: -3000, c: 0 });
+  // 정산: 켠 매치의 진행 중 금액이 들어가고, 끈 매치는 들어가지 않는다
+  const on = G.computeAll(Object.assign({}, r, { games: { match: { enabled: true, unit: 10000, mode: 'team' } } }));
+  assert.deepEqual(Object.fromEntries(on.settlement.rows.map((x) => [x.id, x.net])), { a: 10000, b: 10000, c: -10000, d: -10000 });
+  const off = G.computeAll(Object.assign({}, r, { games: { match: { enabled: false, unit: 10000, mode: 'team' } } }));
+  assert.ok(off.settlement.rows.every((x) => x.net === 0));
+  assert.equal(off.match.matches[0].money, 10000);
 });
 
 test('team nassau lists the stroke applied for each team on every hole that counts in one of the three matches', () => {

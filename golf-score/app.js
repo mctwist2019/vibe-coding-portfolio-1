@@ -1930,15 +1930,16 @@
     var mteam = r.games.match.mode === 'team';
     var rule = ruleLine('홀마다 ' + (res.net ? '핸디를 뺀 ' : '') + '타수가 적은 쪽이 그 홀을 이기고, 이긴 홀이 많은 쪽이 매치를 이겨요.' +
       (mteam ? ' 팀은 그 홀에서 가장 잘 친 한 명의 타수로 겨뤄요.' : ' 개인 리그: 모든 사람이 서로 한 번씩 겨뤄요.') +
-      (res.unit ? ' 매치가 끝나면 진 ' + (mteam ? '팀 각자가 홀 차 × ' + won(res.unit) + '을 내요.' : '사람이 홀 차 × ' + won(res.unit) + '을 줘요.') : ''));
+      (res.unit ? ' 진 ' + (mteam ? '팀 각자가 홀 차 × ' + won(res.unit) + '을 내요.' : '사람이 홀 차 × ' + won(res.unit) + '을 줘요.') + ' 매치가 끝나기 전에는 지금까지의 홀 차로 계산해요.' : ''));
     if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 2팀을 지정하세요.');
     return '<div class="card">' + head + rule + '<div class="stack">' +
       res.matches.map(function (m) {
-        // 진행 중에도 지금까지의 홀 차로 계산한 금액을 보여 준다 (정산에는 매치가 끝나야 들어간다)
-        return matchBox(m, m.status, m.money && res.enabled ? won(m.money) : null, m.running && res.enabled ? '지금 ' + (mteam ? '각자 ' : '') + won(m.running) : null);
+        // 진행 중인 매치는 '지금 …원'으로 적는다 (정산에도 그 금액이 들어간다). 끝난 매치와 지난 라운드의 기록은 금액만 적는다
+        var fin = m.status.finished || state.readOnly;
+        return matchBox(m, m.status, fin && m.money && res.enabled ? won(m.money) : null, !fin && m.running && res.enabled ? '지금 ' + (mteam ? '각자 ' : '') + won(m.running) : null);
       }).join('') +
       '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. ' +
-      (res.unit && res.enabled ? '진행 중에는 지금까지의 홀 차 × 단가를 보여 줘요. 금액은 매치가 끝나면 확정돼 정산에 들어가요.' : '금액은 매치 종료 시 홀 차 × 단가로 확정됩니다.') + '</div></div>' +
+      '금액은 지금까지의 홀 차 × 단가예요.' + (res.unit && res.enabled ? ' 매치가 진행 중이어도 정산에 들어가고, 끝나면 확정돼요.' : '') + '</div></div>' +
       (mteam ? res.matches.map(function (m) { return matchBestCard(r, m, res.net); }).join('') : '');
   }
 
@@ -2120,7 +2121,7 @@
           (fd.total > fd.startOut ? ' 미리 걷었다면 스킨스 탭 공금 장부에서 "공금을 걷었어요"를 고르세요.' : '')) +
         ' 손익은 낸 돈' + (fd.caddieTotal ? '과 캐디 몫' : '') + '까지 넣은 금액이에요.</div>';
     }
-    if (!state.readOnly && holesDone(r) < r.holes) html += '<div class="notice">아직 ' + (r.holes - holesDone(r)) + '홀이 남았어요. 매치/나소 금액은 매치가 끝나야 확정됩니다.</div>';
+    if (!state.readOnly && holesDone(r) < r.holes) html += '<div class="notice">아직 ' + (r.holes - holesDone(r)) + '홀이 남았어요. 매치 금액은 지금까지의 홀 차로 넣었고, 나소는 판이 끝나야 들어가요.</div>';
     html += '<button class="btn block" data-action="share-text">결과 복사 / 공유</button>';
     return html;
   }

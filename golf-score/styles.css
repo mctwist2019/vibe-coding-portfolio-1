@@ -244,6 +244,13 @@ tr.me td { font-weight: 700; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button { flex: 0 0 auto; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 8px 14px; font-weight: 600; font-size: 14px; color: var(--muted); min-height: 38px; }
 .tabs button.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+/* 설정에서 꺼 둔 게임의 탭: 탭 이름은 흐린 점선, 고르면 회색. 맨 위에 꺼져 있다는 안내를 두고 그 아래 내용은 흐리게 보여 참고용임을 알린다 */
+.tabs button.off { color: #9aa6a0; border-style: dashed; }
+.tabs button.off.active { background: #87928c; border-color: #87928c; border-style: solid; color: #fff; }
+.notice.off { background: #fff4e0; color: #6b4300; border: 1px solid #efd09a; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }
+.notice.off span { flex: 1 1 200px; }
+.notice.off .btn { flex: 0 0 auto; }
+.gameoff { display: flex; flex-direction: column; gap: 14px; opacity: .5; }
 
 .matchbox { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
 .matchbox .side { font-weight: 700; } .matchbox .side.r { text-align: right; }

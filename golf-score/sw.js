@@ -1,5 +1,5 @@
 /* 오프라인 지원: 네트워크 우선, 실패 시 캐시 */
-var CACHE = 'golf-score-v15';
+var CACHE = 'golf-score-v16';
 var ASSETS = ['./', './index.html', './styles.css', './games.js', './analysis.js', './courses.js', './coursemaps.js', './sync.js', './app.js', './vendor/mqtt.min.js', './icon.svg', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png', './manifest.webmanifest'];
 
 self.addEventListener('install', function (e) {

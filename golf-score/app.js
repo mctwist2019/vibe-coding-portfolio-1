@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 15;
+  var BUILD = 16;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -1640,14 +1640,30 @@
       var g0 = all[t[0]], en = g0 && g0.enabled;
       // ₩ 표시는 실제로 정산에 합산되는 게임에만 (켜져 있어도 조건 미충족으로 제외되면 표시하지 않음)
       var inc = t[0] === 'bonus' ? !!(en && (en.nearest || en.longest || en.birdie)) : t[0] === 'stroke' ? r.games.stroke.unit > 0 : !!(en && !g0.error);
-      return '<button data-action="tab" data-tab="' + t[0] + '" class="' + (tab === t[0] ? 'active' : '') + '">' + t[1] + (inc ? ' ₩' : '') + '</button>';
+      return '<button data-action="tab" data-tab="' + t[0] + '" class="' + (tab === t[0] ? 'active' : '') + (gameOff(all, t[0]) ? ' off' : '') + '">' + t[1] + (inc ? ' ₩' : '') + '</button>';
     }).join('') + '</div>';
-    html += ({
+    var body = ({
       stroke: tabStroke, stableford: tabStableford, skins: tabSkins, ojang: tabOjang, match: tabMatch, nassau: tabNassau,
       bestball: tabBestball, vegas: tabVegas, bonus: tabBonus, settle: tabSettle
     })[tab](r, all);
+    // 꺼 둔 게임: 계산은 그대로 보여 주되(참고용) 맨 위에 꺼져 있다고 알리고 내용은 흐리게 둔다
+    html += gameOff(all, tab) ? offNotice(tab) + '<div class="gameoff">' + body + '</div>' : body;
     html += '</div>' + bottomNav('board');
     return html;
+  }
+
+  /** 리더보드 탭의 게임이 정산에서 꺼져 있는지. 종합 · 스테이블포드 · 정산은 켜고 끄는 게임이 아니다. 보너스는 니어 · 롱기 · 버디가 모두 꺼졌을 때 */
+  function gameOff(all, key) {
+    var g = all[key];
+    if (!g) return false;
+    if (key === 'bonus') return !(g.enabled && (g.enabled.nearest || g.enabled.longest || g.enabled.birdie));
+    return ['skins', 'ojang', 'match', 'nassau', 'bestball', 'vegas'].indexOf(key) >= 0 && !g.enabled;
+  }
+  /** 꺼 둔 게임의 탭 맨 위 안내. 진행 중인 라운드에서는 바로 켤 수 있다 (보너스는 탭 안의 세 단추로 켠다) */
+  function offNotice(key) {
+    return '<div class="notice off"><span><b>꺼 둔 게임이에요.</b> ' +
+      (key === 'bonus' ? '니어 · 롱기 · 버디 내기를 모두 꺼 두어서 정산에 들어가지 않아요. 아래 내용은 참고용이에요.' : '정산에 들어가지 않고, 아래 금액은 참고용이에요.') + '</span>' +
+      (state.readOnly || key === 'bonus' ? '' : '<button class="btn sm" data-action="toggle-money" data-key="' + key + '">정산에 넣기</button>') + '</div>';
   }
 
   /** 리더보드의 게임별 룰 설명 한 줄. text는 앱이 만든 글(금액은 won()으로)만 넣는다 */

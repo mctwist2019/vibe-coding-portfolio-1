@@ -199,13 +199,17 @@
     return g;
   }
   /**
-   * 저장된 게임 설정에 '14 이상에서 만듦' 표시는 있는데 가입 기준 칸이 아예 없으면, 예전 버전(13)인 채로 그 라운드에 참여했던 기기다
-   * (13은 모르는 가입 기준은 버리고 만든 버전 표시만 받아 둔다). 빠진 칸을 0으로 채우면 본전 기준을 고른 것처럼 보여
-   * 다음 새 라운드가 그 0을 베끼므로, 채우기 전에 표시를 13으로 낮춘다. 그 라운드의 돈(이 기기가 보여 준 본전 기준)은 바뀌지 않는다
+   * 지난 라운드(prev)의 설정을 새 라운드로 베낄 때, 그 설정을 어느 버전에서 만든 것으로 볼지.
+   * 가입 기준(14에서 생김)에 수정 기록(rev)이 없으면 이 버전의 기기가 정하거나 받은 값이 아니다:
+   *  - 예전 버전(13)인 채로 그 라운드에 참여했던 기기 (13은 모르는 설정은 버리고 '만든 버전' 표시만 받아 둔다)
+   *  - 예전 기기가 쓴 스냅샷으로 참여해 호스트의 가입 기준을 끝내 받지 못한 기기
+   * 이때 빠진 칸은 0으로 채워져 있을 뿐 본전 기준을 고른 것이 아니므로, 14보다 앞에서 만든 것으로 보고 새 기본값(6만 원)을 준다.
+   * 이 버전에서 시작한 라운드는 시작할 때 모든 설정에 수정 기록이 찍히고(stampAll), 참여한 기기는 호스트의 기록을 함께 받는다.
+   * 지난 라운드 자체(설정과 '만든 버전' 표시)는 건드리지 않는다: 표시는 함께 입력하는 기기들이 나눠 갖는 값이다
    */
-  function fromOldDevice(g) {
-    if (g && g.bonus && Number(g.bonus.made) >= 14 && !(g.skins && g.skins.join !== undefined)) g.bonus.made = 13;
-    return g;
+  function copiedFrom(prev) {
+    var from = madeBy(prev.games), jr = prev.rev && prev.rev['gm:skins:join'];
+    return jr && jr.ts > 0 ? from : Math.min(from, 13);
   }
   /** 모든 게임 계산. 홀을 친 순서(10번홀 출발 등)를 넘겨 스킨스 이월·OECD 가입·오장의 '앞 홀'이 실제 순서를 따르게 한다 (스킨스는 이 버전에서 만든 라운드만) */
   function computeAll(r) { return G.computeAll(r, { order: A.playOrder(r).order }); }
@@ -223,14 +227,14 @@
     if (!s.clientId || s.clientId.length < 8) s.clientId = S.randomId(10);
     s.me = s.me || null;
     s.meSkipped = s.meSkipped || {};
-    if (s.round) { fillGames(fromOldDevice(s.round.games = s.round.games || {})); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); delete s.round.courseFrom; }
+    if (s.round) { fillGames(s.round.games = s.round.games || {}); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); delete s.round.courseFrom; }
     // 예전 버전이 저장해 둔 새 라운드 초안과 지난 라운드에는 그 뒤에 생긴 게임 설정(오장 등)이 없다. 빠진 채로 화면을 그리면 오류가 나므로 채워 둔다
     // 예전 버전에서 쓰다 만 초안은 새 라운드와 같은 스킨스 기본값(공금 방식 등)으로 맞춘다. 지난 라운드와 진행 중인 라운드는 돈 계산이 바뀌면 안 되므로 그대로 둔다
     if (s.draft && typeof s.draft === 'object') {
       var dg = s.draft.games, dfrom = madeBy(dg); // 채우기 전에 본다 (초안에 공금 방식 표시가 없으면 10, 있고 made가 없으면 11)
       upgradeDefaults(fillGames(s.draft.games = dg || {}), dfrom);
     }
-    s.history.forEach(function (hr) { if (hr && typeof hr === 'object') fillGames(fromOldDevice(hr.games = hr.games || {})); });
+    s.history.forEach(function (hr) { if (hr && typeof hr === 'object') fillGames(hr.games = hr.games || {}); });
     s.joining = null;
     s.mapZoom = null;
     // 쓰던 키워드(추가를 누르기 전의 글)는 앱을 다시 열어도 남긴다: 그 홀에 돌아오면 입력란에 보이고, 다른 곳으로 가면 그 홀의 키워드로 들어간다
@@ -2674,7 +2678,7 @@
         state.draft.players = prev.players.map(function (p) { return { id: uid(), name: p.name, hcp: p.hcp, team: p.team }; });
         // 예전 버전에서 만든 라운드에는 그 뒤에 생긴 설정(공금 방식, 니어·롱기 홀 제한과 지우개)이 없었다. 그대로 베끼면 꺼진 채로 시작하므로 새 기본값을 준다.
         // 이 버전에서 만든 라운드를 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다
-        state.draft.games = upgradeDefaults(fillGames(clone(prev.games || {})), madeBy(prev.games));
+        state.draft.games = upgradeDefaults(fillGames(clone(prev.games || {})), copiedFrom(prev));
         state.draft.games.skins.playorder = true;
         state.draft.holes = prev.holes;
         if (state.draft.holes !== 18) state.draft.games.nassau.enabled = false; // 나소는 18홀 전용

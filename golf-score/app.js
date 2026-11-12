@@ -503,6 +503,13 @@
     s.flush().then(function (ok) { if (!ok) throw new Error('offline'); return s.clearRetained(); })
       .then(function (ok) { if (!ok) throw new Error('offline'); r.status = 'live'; stopSharing(); toast('서버의 공유 데이터를 삭제했어요'); }, fail);
   }
+  /**
+   * 참여하면서 그냥 버린 라운드 (홀을 하나도 입력하지 않은 라운드는 기록에 남기지 않는다).
+   * 참여한 방의 라운드가 바로 그 라운드이면(같은 id) 버리지 않고 합친다 (adoptSnapshot): 공유가 끝난 뒤 이 기기에만 있는 설정
+   * (예전 버전인 채로 참여했던 기기가 다시 연 방에는 없는 가입 기준 등)이 사라지지 않게 한다. 홀을 입력한 라운드는 기록에 들어가 같은 방식으로 합쳐진다.
+   * 다시 시도·취소 뒤에도 남아 있어야 하므로 참여를 시작할 때 지우지 않는다. 앱을 다시 열면 없어진다
+   */
+  var replacedRound = null;
   function joinRoom(code, b) {
     code = S.normalizeCode(code);
     if (!S.isValidCode(code)) { alert('코드는 영문/숫자 8자리예요. (예: ABCD-EFGH)'); return; }
@@ -510,7 +517,7 @@
     var cur = state.round;
     if (cur && cur.share && cur.share.code === code) { state.readOnly = false; state.viewRoundId = null; cur.share.active = true; save(); ensureSession(); go('play'); return; }
     if (cur) {
-      if (holesDone(cur) === 0 && !sharingActive() && !courseEdited(cur)) { clearScan(); closeSession(); state.round = null; resetBaseline(); }
+      if (holesDone(cur) === 0 && !sharingActive() && !courseEdited(cur)) { clearScan(); closeSession(); replacedRound = cur; state.round = null; resetBaseline(); }
       else {
         if (!confirm('진행 중인 라운드(' + (cur.name || '라운드') + ', ' + holesDone(cur) + '/' + cur.holes + '홀)가 있어요.\n참여하면 이 라운드는 지난 라운드에 저장되고 공유 라운드로 바뀝니다.')) return;
         clearScan(); closeSession(); archiveCurrent();
@@ -545,6 +552,8 @@
     // 기록에 같은 라운드가 있으면 로컬 기록과 병합 (더 새로운 값 유지) 후 기록에서 제거
     var dup = null;
     state.history = state.history.filter(function (h) { if (h.id === r.id) { dup = h; return false; } return true; });
+    // 홀을 입력하기 전이라 참여하면서 버린 라운드가 바로 이 라운드이면 그것도 같은 방식으로 합친다 (joinRoom)
+    if (!dup && replacedRound && replacedRound.id === r.id) dup = replacedRound;
     if (dup) { S.merge(r, S.exportKeys(dup)); if (dup.courseApplied) r.courseApplied = dup.courseApplied; }
     if (r.status === 'closed') { // 호스트가 서버에서 삭제했지만 retained 스냅샷만 남은 경우
       closeSession();
@@ -552,7 +561,7 @@
       save(); render(); toast('호스트가 이미 종료한 공유예요.');
       return;
     }
-    state.joining = null;
+    state.joining = null; replacedRound = null;
     if (r.status === 'finished') {
       r.finishedAt = r.finishedAt || Date.now(); r.share.active = false;
       closeSession();

@@ -504,12 +504,14 @@
       .then(function (ok) { if (!ok) throw new Error('offline'); r.status = 'live'; stopSharing(); toast('서버의 공유 데이터를 삭제했어요'); }, fail);
   }
   /**
-   * 참여하면서 그냥 버린 라운드 (홀을 하나도 입력하지 않은 라운드는 기록에 남기지 않는다).
+   * 참여하면서 그냥 버린 라운드들 (라운드 id → 라운드). 모든 사람의 점수가 들어간 홀이 하나도 없고, 공유 중이 아니며,
+   * 코스를 고치지 않은 라운드는 묻지 않고 버리고 기록에도 남기지 않는다.
    * 참여한 방의 라운드가 바로 그 라운드이면(같은 id) 버리지 않고 합친다 (adoptSnapshot): 공유가 끝난 뒤 이 기기에만 있는 설정
    * (예전 버전인 채로 참여했던 기기가 다시 연 방에는 없는 가입 기준 등)이 사라지지 않게 한다. 홀을 입력한 라운드는 기록에 들어가 같은 방식으로 합쳐진다.
-   * 다시 시도·취소 뒤에도 남아 있어야 하므로 참여를 시작할 때 지우지 않는다. 앱을 다시 열면 없어진다
+   * 다시 시도·취소 뒤에도, 그 사이에 다른 라운드를 시작했거나 다른 방에 다녀온 뒤에도 남아 있어야 하므로 id별로 두고
+   * 그 라운드의 방에 들어갔을 때만 지운다. 앱을 다시 열면 없어진다
    */
-  var replacedRound = null;
+  var replacedRounds = Object.create(null);
   function joinRoom(code, b) {
     code = S.normalizeCode(code);
     if (!S.isValidCode(code)) { alert('코드는 영문/숫자 8자리예요. (예: ABCD-EFGH)'); return; }
@@ -517,7 +519,7 @@
     var cur = state.round;
     if (cur && cur.share && cur.share.code === code) { state.readOnly = false; state.viewRoundId = null; cur.share.active = true; save(); ensureSession(); go('play'); return; }
     if (cur) {
-      if (holesDone(cur) === 0 && !sharingActive() && !courseEdited(cur)) { clearScan(); closeSession(); replacedRound = cur; state.round = null; resetBaseline(); }
+      if (holesDone(cur) === 0 && !sharingActive() && !courseEdited(cur)) { clearScan(); closeSession(); replacedRounds[cur.id] = cur; state.round = null; resetBaseline(); }
       else {
         if (!confirm('진행 중인 라운드(' + (cur.name || '라운드') + ', ' + holesDone(cur) + '/' + cur.holes + '홀)가 있어요.\n참여하면 이 라운드는 지난 라운드에 저장되고 공유 라운드로 바뀝니다.')) return;
         clearScan(); closeSession(); archiveCurrent();
@@ -553,15 +555,24 @@
     var dup = null;
     state.history = state.history.filter(function (h) { if (h.id === r.id) { dup = h; return false; } return true; });
     // 홀을 입력하기 전이라 참여하면서 버린 라운드가 바로 이 라운드이면 그것도 같은 방식으로 합친다 (joinRoom)
-    if (!dup && replacedRound && replacedRound.id === r.id) dup = replacedRound;
-    if (dup) { S.merge(r, S.exportKeys(dup)); if (dup.courseApplied) r.courseApplied = dup.courseApplied; }
+    var replaced = !dup && replacedRounds[r.id];
+    if (replaced) dup = replaced;
+    var mine = []; // 이 기기의 사본이 더 새로워서 방의 값 대신 남은 키
+    if (dup) {
+      var own = S.exportKeys(dup);
+      // 버린 라운드의 진행 상태는 합치지 않고 전처럼 방의 상태를 따른다: 공유 종료는 status에 새 수정 기록을 찍으므로(closed → live),
+      // 합치면 그 뒤에 들어간 방의 라운드가 이미 종료된 것이어도 이 기기의 '진행 중'이 이겨서 종료된 라운드가 다시 열린다
+      if (replaced) delete own.status;
+      mine = S.merge(r, own).changed;
+      if (dup.courseApplied) r.courseApplied = dup.courseApplied;
+    }
     if (r.status === 'closed') { // 호스트가 서버에서 삭제했지만 retained 스냅샷만 남은 경우
       closeSession();
       state.joining = { code: code, status: 'timeout', b: idx };
       save(); render(); toast('호스트가 이미 종료한 공유예요.');
       return;
     }
-    state.joining = null; replacedRound = null;
+    state.joining = null; delete replacedRounds[r.id];
     if (r.status === 'finished') {
       r.finishedAt = r.finishedAt || Date.now(); r.share.active = false;
       closeSession();
@@ -573,6 +584,8 @@
     state.round = r; state.boardTab = 'stroke'; state.me = null;
     resetBaseline();
     if (session) session.setName(myName());
+    // 남은 값은 바로 보낸다: 받은 것이 서버에 남아 있던 스냅샷뿐이면(다른 기기가 꺼져 있을 때) 누가 고치기 전에는 전해지지 않는다
+    if (session && mine.length) session.markDirty(mine);
     save(); go('play');
     ensureRoundCourse();
   }

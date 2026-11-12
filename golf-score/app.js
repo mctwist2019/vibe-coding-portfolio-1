@@ -194,7 +194,7 @@
   function upgradeDefaults(g, from) {
     if (from < 11) useNewSkinsDefaults(g);
     if (from < 12) useNewBonusDefaults(g);
-    if (from < 14 && !(g.skins.join > 0)) g.skins.join = OECD_JOIN;
+    if (from < 14 && !(typeof g.skins.join === 'number' && g.skins.join >= 1)) g.skins.join = OECD_JOIN;
     g.bonus.made = BUILD;
     return g;
   }

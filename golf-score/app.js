@@ -2329,9 +2329,10 @@
     stale: '새 자료가 아직 준비되지 않았어요. 잠시 뒤 "새로 고침"을 누르고 다시 받아 주세요.' };
   function courseWhy(why) { return Object.prototype.hasOwnProperty.call(COURSE_WHY, why) ? COURSE_WHY[why] : '코스 파일의 내용이 올바르지 않아 받지 못했어요.'; }
   /** 받았다는 알림. 새 라운드 화면이 이 코스와 다른 홀 수로 열릴 때는(지난 라운드가 9홀이었던 경우 등) 홀 수를 바꾸라고 알려 준다.
-   *  받는 사이에 새 라운드 화면으로 가 있으면 그 화면에 지금 골라져 있는 홀 수로 본다 */
+   *  새 라운드 화면에 있거나 그 화면에서 연 목록에 있으면(돌아갈 수 있으면) 그 화면에 지금 골라져 있는 홀 수로 본다.
+   *  그 화면을 떠나 홈 등에 있으면 쓰던 새 라운드는 버려지므로("새 라운드 시작"은 늘 새로 만든다) 새로 열릴 때의 홀 수로 본다 */
   function gotCourseMsg(c) {
-    var next = (state.view === 'setup' || state.courseBack === 'setup') && state.draft ? state.draft.holes : state.round ? state.round.holes : state.history && state.history[0] ? state.history[0].holes : 18;
+    var next = (state.view === 'setup' || (state.view === 'courses' && state.courseBack === 'setup')) && state.draft ? state.draft.holes : state.round ? state.round.holes : state.history && state.history[0] ? state.history[0].holes : 18;
     return "'" + c.name + "' 코스를 받았어요. " + (c.holes === next ? '새 라운드의 "코스 불러오기"에서 고르세요.' : '새 라운드에서 홀 수를 ' + c.holes + '홀로 바꾸면 "코스 불러오기"에 나와요.');
   }
   /**
@@ -2515,22 +2516,27 @@
     var strip = $app.querySelector('.hole-strip'), cur = strip && strip.querySelector('.cur');
     if (cur) strip.scrollLeft = Math.max(0, cur.offsetLeft - strip.clientWidth / 2 + cur.offsetWidth / 2);
   }
-  /** 새 라운드 화면이 그려져 있을 때, 코스 칸에서 높이가 바뀌는 부분("코스 불러오기"와 그 아래 안내) 바로 밑에 있는 단추의 위치. 다른 화면이면 null */
-  function setupAnchorTop() {
-    var a = $app.querySelector('[data-action="open-courses"][data-back="setup"]');
-    return a ? a.getBoundingClientRect().top : null;
+  /**
+   * 새 라운드 화면이 그려져 있을 때 스크롤을 맞추는 기준 위치. 다른 화면이면 null.
+   * 기본은 코스 칸에서 높이가 바뀌는 부분("코스 불러오기"와 그 아래 안내) 바로 밑에 있는 단추의 윗변.
+   * whole이면 그 단추가 든 카드("라운드 정보")의 아랫변: 단추 아래의 설명 줄도 고른 코스에 따라 높이가 달라지기 때문이다
+   */
+  function setupAnchorTop(whole) {
+    var a = $app.querySelector('[data-action="open-courses"][data-back="setup"]'), card = whole && a && a.closest ? a.closest('.card') : null;
+    return card ? card.getBoundingClientRect().bottom : a ? a.getBoundingClientRect().top : null;
   }
   function render() {
     var y = window.scrollY, mz = $app.querySelector('.mapzoom'), my = mz ? mz.scrollTop : 0; // 약도 크게 보기 창은 따로 스크롤된다
-    var keep = setupAnchorTop(), bar = keep === null ? null : $app.querySelector('.topbar');
-    if (keep !== null && keep > (bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0)) keep = null; // 코스 칸이 보이는 중이면 그대로 둔다
+    var keep = setupAnchorTop(), bar = keep === null ? null : $app.querySelector('.topbar'), lim = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
+    var whole = keep !== null && setupAnchorTop(true) <= lim; // 카드가 통째로 화면 위로 지나갔으면 카드의 아랫변을 기준으로 삼는다
+    if (whole) keep = setupAnchorTop(true); else if (keep !== null && keep > lim) keep = null; // 코스 칸이 보이는 중이면 그대로 둔다
     $app.innerHTML = viewHtml();
     mz = $app.querySelector('.mapzoom');
     document.documentElement.classList.toggle('noscroll', !!mz); // 약도 창이 열려 있는 동안 뒤 화면이 따라 움직이지 않게
     window.scrollTo(0, y);
     // 새 라운드 화면: 코스 칸이 화면 위로 지나가 있는 동안 그 칸의 높이가 바뀌면(받던 코스가 도착해 "코스 불러오기"가 한 줄 늘 때 등)
     // 보고 있던 내용이 손가락 아래에서 밀린다. 코스 칸 아래 내용이 제자리에 있도록 스크롤을 맞춘다
-    var now = keep === null ? null : setupAnchorTop(), dy = now === null ? 0 : Math.round(now - keep);
+    var now = keep === null ? null : setupAnchorTop(whole), dy = now === null ? 0 : Math.round(now - keep);
     if (dy) window.scrollBy(0, dy);
     if (mz && my) mz.scrollTop = my;
     centerHoleStrip();

@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 14;
+  var BUILD = 15;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -1885,7 +1885,25 @@
     if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 2팀을 지정하세요.');
     return '<div class="card">' + head + rule + '<div class="stack">' +
       res.matches.map(function (m) { return matchBox(m, m.status, m.money && res.enabled ? won(m.money) : null); }).join('') +
-      '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. 금액은 매치 종료 시 홀 차 × 단가로 확정됩니다.</div></div>';
+      '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. 금액은 매치 종료 시 홀 차 × 단가로 확정됩니다.</div></div>' +
+      (mteam ? res.matches.map(function (m) { return matchBestCard(r, m, res.net); }).join('') : '');
+  }
+
+  /** 팀 매치: 홀마다 두 팀에 적용된 타수(팀에서 가장 잘 친 타수)와 그 타수를 친 사람. 이긴 팀의 칸은 위 점 표시와 같은 색의 굵은 글씨 */
+  function matchBestCard(r, m, net) {
+    var rows = '';
+    (m.best || []).forEach(function (b, h) {
+      if (!b || !b.a || !b.b) return;
+      var v = m.status.holes[h];
+      var cell = function (x, cls) {
+        return '<td class="l' + cls + '">' + x.pids.map(function (pid) { return esc(nameOf(r, pid)); }).join(' · ') + ' <b>' + x.score + '</b></td>';
+      };
+      rows += '<tr><td>' + (h + 1) + '</td>' + cell(b.a, v === 1 ? ' win a' : '') + cell(b.b, v === -1 ? ' win b' : '') + '</tr>';
+    });
+    return '<div class="card"><h2>홀별 베스트<span class="hint">팀에 적용된 ' + (net ? '네트 ' : '') + '타수</span></h2>' +
+      (rows ? '<table class="best"><thead><tr><th>홀</th><th class="l">' + esc(m.a.name) + '</th><th class="l">' + esc(m.b.name) + '</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        '<div class="muted small" style="margin-top:8px">홀마다 팀에서 가장 잘 친 사람과 그 ' + (net ? '타수(핸디를 뺀 값)' : '타수') + '예요. 같은 타수면 함께 적어요. 굵은 색 글씨가 그 홀을 이긴 팀이에요.</div>'
+        : '<div class="muted">두 팀 모두 점수를 넣은 홀부터 나와요.</div>') + '</div>';
   }
 
   function tabNassau(r, all) {

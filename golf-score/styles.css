@@ -48,6 +48,13 @@ table.fund td.l { white-space: normal; word-break: keep-all; overflow-wrap: anyw
 /* 종합 순위 표: 이름은 줄바꿈을 허용하고, 네트 칸이 있으면(여섯 칸) 칸 여백을 줄인다. 안 그러면 좁은 화면에서 표가 카드와 화면 밖으로 나간다 */
 table.ranks td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
 table.ranks.hcp th, table.ranks.hcp td { padding-left: 3px; padding-right: 3px; }
+/* 팀 매치의 홀별 베스트 표: 홀 칸은 좁게, 두 팀 칸은 같은 너비. 이름은 줄바꿈을 허용하고, 이긴 팀의 칸은 위 점 표시와 같은 색의 굵은 글씨 */
+table.best { table-layout: fixed; }
+table.best th:first-child, table.best td:first-child { width: 2.6em; padding-left: 0; padding-right: 0; }
+table.best td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
+table.best td.win { font-weight: 700; }
+table.best td.win.a { color: var(--team-A); }
+table.best td.win.b { color: var(--team-B); }
 /* 리더보드의 게임별 룰 설명 */
 .rule { margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 13px; line-height: 1.5; word-break: keep-all; overflow-wrap: anywhere; }
 .rule b { margin-right: 6px; color: var(--text); }

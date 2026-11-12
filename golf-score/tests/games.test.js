@@ -916,3 +916,67 @@ test('all files carry the same build number as the service worker cache', () => 
   assert.equal(guard('sync.js'), guard('games.js')); assert.equal(guard('analysis.js'), guard('games.js'));
   assert.ok(src('app.js').includes('window.__gsApp = BUILD;'), 'app.js announces its build');
 });
+
+// ── 팀 매치: 홀마다 적용된 타수와 그 타수를 친 사람 (화면의 '홀별 베스트') ──
+const TEAM4 = [{ id: 'a', name: 'A', team: 'A' }, { id: 'b', name: 'B', team: 'A' }, { id: 'c', name: 'C', team: 'B' }, { id: 'd', name: 'D', team: 'B' }];
+
+test('team match lists, hole by hole, the stroke applied for each team and who made it', () => {
+  // 1번홀 4(a) : 4(c·d) 무 / 2번홀 3(b) : 4(d) A승 / 3번홀 5(a·b) : 4(c) B승 / 4번홀 d 미입력 / 5번홀 4(a) : 6(c) A승 / 6~9번홀 미입력
+  const r = mkRound(TEAM4, { a: [4, 5, 5, 4, 4], b: [5, 3, 5, 4, 6], c: [4, 6, 4, 4, 6], d: [4, 4, 7, null, 7] }, { holes: 9 });
+  const res = G.matchPlay(r, { unit: 1000, mode: 'team' });
+  assert.equal(res.matches.length, 1);
+  const m = res.matches[0];
+  assert.deepEqual(m.status.holes, [0, 1, -1, null, 1, null, null, null, null]);
+  assert.deepEqual(m.best, [
+    { a: { score: 4, pids: ['a'] }, b: { score: 4, pids: ['c', 'd'] } },
+    { a: { score: 3, pids: ['b'] }, b: { score: 4, pids: ['d'] } },
+    { a: { score: 5, pids: ['a', 'b'] }, b: { score: 4, pids: ['c'] } },
+    null,
+    { a: { score: 4, pids: ['a'] }, b: { score: 6, pids: ['c'] } },
+    null, null, null, null
+  ]);
+  // 적용된 타수는 매치 계산에 쓰는 팀 타수와 같고, 승패 표시와도 맞는다
+  m.best.forEach((b, h) => {
+    if (!b) return;
+    assert.equal(b.a.score, G.teamHoleScore(r, m.a.pids, h, false, 1));
+    assert.equal(b.b.score, G.teamHoleScore(r, m.b.pids, h, false, 1));
+    assert.equal(Math.sign(b.b.score - b.a.score), m.status.holes[h]);
+  });
+  assert.equal(m.status.text, '1UP (4홀)');
+});
+
+test('team match best: holes after the match is decided are left out, like the hole marks', () => {
+  // A팀이 1~5번홀을 모두 이겨 5&4로 끝난다. 6~9번홀에도 점수는 있다
+  const r = mkRound(TEAM4, { a: Array(9).fill(3), b: Array(9).fill(5), c: Array(9).fill(4), d: Array(9).fill(6) }, { holes: 9 });
+  const res = G.matchPlay(r, { unit: 1000, mode: 'team' });
+  const m = res.matches[0];
+  assert.equal(m.status.text, '5&4');
+  assert.equal(m.status.holes.length, 5);
+  assert.equal(m.best.length, 5);
+  assert.ok(m.best.every(b => b && b.a.score === 3 && b.a.pids.join() === 'a' && b.b.score === 4 && b.b.pids.join() === 'c'));
+  // 돈은 그대로: 진 팀 각자가 홀 차 5 × 1,000원
+  const net = Object.fromEntries(G.settle(res.transfers, r.players).rows.map(x => [x.id, x.net]));
+  assert.deepEqual(net, { a: 5000, b: 5000, c: -5000, d: -5000 });
+});
+
+test('team match best with handicaps uses the net stroke and the player it belongs to', () => {
+  // b는 핸디 18(홀마다 1타): 1번홀 그로스 5 → 네트 4로 a(4)와 같다. 2번홀 그로스 4 → 네트 3으로 혼자 가장 좋다
+  const players = [{ id: 'a', name: 'A', team: 'A', hcp: 0 }, { id: 'b', name: 'B', team: 'A', hcp: 18 }, { id: 'c', name: 'C', team: 'B', hcp: 0 }, { id: 'd', name: 'D', team: 'B', hcp: 0 }];
+  const r = mkRound(players, { a: [4, 4], b: [5, 4], c: [4, 4], d: [5, 5] });
+  const net = G.matchPlay(r, { mode: 'team', net: true }).matches[0];
+  assert.deepEqual(net.best[0], { a: { score: 4, pids: ['a', 'b'] }, b: { score: 4, pids: ['c'] } });
+  assert.deepEqual(net.best[1], { a: { score: 3, pids: ['b'] }, b: { score: 4, pids: ['c'] } });
+  assert.deepEqual(net.status.holes.slice(0, 2), [0, 1]);
+  const gross = G.matchPlay(r, { mode: 'team' }).matches[0];
+  assert.deepEqual(gross.best[0], { a: { score: 4, pids: ['a'] }, b: { score: 4, pids: ['c'] } });
+  assert.deepEqual(gross.best[1], { a: { score: 4, pids: ['a', 'b'] }, b: { score: 4, pids: ['c'] } });
+});
+
+test('individual match play has no best list, and a team of one names that player', () => {
+  const r = mkRound([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], { a: [4, 5], b: [5, 5] }, { holes: 9 });
+  assert.ok(G.matchPlay(r, { mode: 'individual' }).matches.every(m => !('best' in m)));
+  const t = mkRound([{ id: 'a', name: 'A', team: 'A' }, { id: 'b', name: 'B', team: 'B' }], { a: [4, 5], b: [5, 5] }, { holes: 9 });
+  const m = G.matchPlay(t, { mode: 'team' }).matches[0];
+  assert.deepEqual(m.best.slice(0, 3), [{ a: { score: 4, pids: ['a'] }, b: { score: 5, pids: ['b'] } }, { a: { score: 5, pids: ['a'] }, b: { score: 5, pids: ['b'] } }, null]);
+  assert.equal(G.teamHoleBest(t, ['a', 'b'], 2, false), null);
+});

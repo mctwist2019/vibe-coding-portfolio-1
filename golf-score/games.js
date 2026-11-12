@@ -147,6 +147,21 @@
     return sum;
   }
 
+  /**
+   * 팀에서 그 홀에 적용된 타수(가장 좋은 타수)와 그 타수를 친 사람들. 전원 입력 전이면 null.
+   * 타수는 teamHoleScore(…, count 1)과 같다. 같은 타수를 친 사람이 여럿이면 모두 넣는다. 화면에 보여 주는 데만 쓴다
+   */
+  function teamHoleBest(round, pids, h, useNet, sm) {
+    var best = null, who = [];
+    for (var i = 0; i < pids.length; i++) {
+      var s = score(round, pids[i], h, useNet, sm);
+      if (s === null) return null;
+      if (best === null || s < best) { best = s; who = [pids[i]]; }
+      else if (s === best) who.push(pids[i]);
+    }
+    return best === null ? null : { score: best, pids: who };
+  }
+
   /** 송금 생성: 승자(들)에게 패자 각각이 unit씩 지급. 승자 여러 명이면 균등 분배 */
   function makeTransfers(winnerPids, loserPids, amountPerLoser, game, note) {
     var out = [];
@@ -568,6 +583,8 @@
       var A = pair[0], B = pair[1];
       var st = computeMatch(seriesFor(round, A, useNet, sm, 1, 0, round.holes), seriesFor(round, B, useNet, sm, 1, 0, round.holes));
       var m = { a: { id: A.id, name: A.name, pids: A.pids }, b: { id: B.id, name: B.name, pids: B.pids }, status: st, money: 0 };
+      // 팀 매치: 매치에 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (승부가 난 뒤의 홀은 status.holes처럼 넣지 않는다)
+      if (A.isTeam) m.best = st.holes.map(function (v, h) { return v === null ? null : { a: teamHoleBest(round, A.pids, h, useNet, sm), b: teamHoleBest(round, B.pids, h, useNet, sm) }; });
       if (st.finished && st.up !== 0 && unit > 0) {
         var win = st.up > 0 ? A : B, lose = st.up > 0 ? B : A;
         m.money = unit * st.margin;
@@ -866,7 +883,7 @@
   }
 
   return {
-    BUILD: 14, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 15, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     defaultStrokeIndex: defaultStrokeIndex,
     defaultPars: defaultPars,
     strokesPerHole: strokesPerHole,
@@ -888,6 +905,7 @@
     skins: skins,
     ojang: ojang,
     matchPlay: matchPlay,
+    teamHoleBest: teamHoleBest,
     nassau: nassau,
     bestBall: bestBall,
     vegas: vegas,

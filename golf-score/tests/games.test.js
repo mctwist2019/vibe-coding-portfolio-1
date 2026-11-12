@@ -991,3 +991,30 @@ test('toParShort: the short names used in the hole-by-hole table', () => {
     assert.equal(short, long === '더블보기' ? '더블' : long === '트리플보기' ? '트리플' : long);
   }
 });
+
+test('match play in progress reports the amount at the current standing, but pays nothing until it ends', () => {
+  // 2홀을 마쳐 B팀이 1UP (1번홀 무, 2번홀 B승). 홀당 10,000원
+  const r = mkRound(TEAM4, { a: [5, 5], b: [6, 6], c: [5, 4], d: [6, 5] });
+  const res = G.matchPlay(r, { unit: 10000, mode: 'team' });
+  const m = res.matches[0];
+  assert.equal(m.status.text, '1UP (2홀)');
+  assert.equal(m.status.finished, false);
+  assert.equal(m.running, 10000);
+  assert.equal(m.money, 0);
+  assert.deepEqual(res.transfers, []);
+  // 2홀 차가 되면 20,000원, 동률이면 0
+  r.scores.c[2] = 3; ['a', 'b', 'd'].forEach((id) => { r.scores[id][2] = 5; });
+  assert.equal(G.matchPlay(r, { unit: 10000, mode: 'team' }).matches[0].running, 20000);
+  const even = mkRound(TEAM4, { a: [5], b: [6], c: [5], d: [6] });
+  assert.equal(G.matchPlay(even, { unit: 10000, mode: 'team' }).matches[0].running, 0);
+  // 단가가 없으면 0
+  assert.equal(G.matchPlay(r, { mode: 'team' }).matches[0].running, 0);
+  // 끝난 매치: 진행 중 금액은 없고 확정 금액만 있다
+  const done = mkRound(TEAM4, { a: Array(9).fill(3), b: Array(9).fill(5), c: Array(9).fill(4), d: Array(9).fill(6) }, { holes: 9 });
+  const dm = G.matchPlay(done, { unit: 10000, mode: 'team' });
+  assert.equal(dm.matches[0].running, 0);
+  assert.equal(dm.matches[0].money, 50000);
+  // 정산에는 진행 중 금액이 들어가지 않는다
+  const all = G.computeAll(Object.assign(r, { games: { match: { enabled: true, unit: 10000, mode: 'team' } } }));
+  assert.ok(all.settlement.rows.every((x) => x.net === 0));
+});

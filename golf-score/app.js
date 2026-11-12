@@ -1899,10 +1899,11 @@
     return html;
   }
 
-  function matchBox(m, st, extra) {
+  /** now: 진행 중인 매치의 지금까지 금액 (매치 탭에서만 넣는다) */
+  function matchBox(m, st, extra, now) {
     var a = st.leader === 'A', b = st.leader === 'B';
     return '<div class="matchbox"><div class="side ' + (a ? 'lead' : '') + '">' + esc(m.a.name) + (a ? ' ▲' : '') + '</div>' +
-      '<div class="st">' + esc(st.text) + '<small>' + (extra || (st.finished ? '종료' : '진행 중')) + '</small></div>' +
+      '<div class="st">' + esc(st.text) + '<small>' + (extra || (st.finished ? '종료' : '진행 중')) + '</small>' + (now ? '<small class="now">' + now + '</small>' : '') + '</div>' +
       '<div class="side r ' + (b ? 'lead' : '') + '">' + (b ? '▲ ' : '') + esc(m.b.name) + '</div>' +
       '<div class="holedots">' + st.holes.map(function (v) { return '<span class="' + (v === 1 ? 'a' : v === -1 ? 'b' : v === 0 ? 't' : '') + '">·</span>'; }).join('') + '</div></div>';
   }
@@ -1916,8 +1917,12 @@
       (res.unit ? ' 매치가 끝나면 진 ' + (mteam ? '팀 각자가 홀 차 × ' + won(res.unit) + '을 내요.' : '사람이 홀 차 × ' + won(res.unit) + '을 줘요.') : ''));
     if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 2팀을 지정하세요.');
     return '<div class="card">' + head + rule + '<div class="stack">' +
-      res.matches.map(function (m) { return matchBox(m, m.status, m.money && res.enabled ? won(m.money) : null); }).join('') +
-      '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. 금액은 매치 종료 시 홀 차 × 단가로 확정됩니다.</div></div>' +
+      res.matches.map(function (m) {
+        // 진행 중에도 지금까지의 홀 차로 계산한 금액을 보여 준다 (정산에는 매치가 끝나야 들어간다)
+        return matchBox(m, m.status, m.money && res.enabled ? won(m.money) : null, m.running && res.enabled ? '지금 ' + (mteam ? '각자 ' : '') + won(m.running) : null);
+      }).join('') +
+      '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. ' +
+      (res.unit && res.enabled ? '진행 중에는 지금까지의 홀 차 × 단가를 보여 줘요. 금액은 매치가 끝나면 확정돼 정산에 들어가요.' : '금액은 매치 종료 시 홀 차 × 단가로 확정됩니다.') + '</div></div>' +
       (mteam ? res.matches.map(function (m) { return matchBestCard(r, m, res.net); }).join('') : '');
   }
 

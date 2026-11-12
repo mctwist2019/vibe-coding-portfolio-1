@@ -589,6 +589,8 @@
       var A = pair[0], B = pair[1];
       var st = computeMatch(seriesFor(round, A, useNet, sm, 1, 0, round.holes), seriesFor(round, B, useNet, sm, 1, 0, round.holes));
       var m = { a: { id: A.id, name: A.name, pids: A.pids }, b: { id: B.id, name: B.name, pids: B.pids }, status: st, money: 0 };
+      // 진행 중인 매치: 지금까지의 홀 차 × 단가 (화면에 보여 주기만 한다. 정산에는 매치가 끝나야 들어간다: 아래 money와 transfers)
+      m.running = !st.finished && st.up !== 0 && unit > 0 ? unit * Math.abs(st.up) : 0;
       // 팀 매치: 매치에 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (승부가 난 뒤의 홀은 status.holes처럼 넣지 않는다)
       if (A.isTeam) m.best = st.holes.map(function (v, h) { return v === null ? null : { a: teamHoleBest(round, A.pids, h, useNet, sm), b: teamHoleBest(round, B.pids, h, useNet, sm) }; });
       if (st.finished && st.up !== 0 && unit > 0) {

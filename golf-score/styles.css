@@ -250,6 +250,7 @@ tr.me td { font-weight: 700; }
 .matchbox .side.lead { color: var(--primary); }
 .matchbox .st { text-align: center; font-weight: 800; font-size: 18px; }
 .matchbox .st small { display: block; font-size: 11px; font-weight: 600; color: var(--muted); }
+.matchbox .st small.now { font-size: 12px; font-weight: 700; color: var(--primary); } /* 진행 중인 매치의 지금까지 금액 */
 .holedots { display: flex; flex-wrap: wrap; gap: 3px; grid-column: 1 / -1; }
 .holedots span { width: 14px; height: 14px; border-radius: 4px; background: #eef2ef; font-size: 0; }
 .holedots span.a { background: var(--team-A); } .holedots span.b { background: var(--team-B); } .holedots span.t { background: #cbd5d0; }

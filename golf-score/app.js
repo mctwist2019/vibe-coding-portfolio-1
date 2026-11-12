@@ -1619,7 +1619,8 @@
       ruleLine('스트로크 플레이: 파 대비 타수(±파)가 낮을수록 순위가 높아요.' + (hasHcp ? ' 네트는 핸디를 뺀 타수예요.' : '') +
         (sg.cap ? ' 양파 한도: 한 홀은 파의 두 배까지만 세요.' : '') +
         (sg.unit > 0 ? ' 내기는 전원이 친 홀의 ' + (sg.net ? '네트 ' : '') + '타수 차 × 타당 ' + won(sg.unit) + '을 둘씩 주고받아요.' : ''));
-    html += '<table><thead><tr><th></th><th class="l">플레이어</th><th>홀</th><th>타수</th><th>±파</th>' + (hasHcp ? '<th>네트</th>' : '') + '</tr></thead><tbody>';
+    // 핸디가 있으면 네트 칸까지 여섯 칸이다: 좁은 화면에서 표가 카드 밖으로 나가지 않게 칸 여백을 줄인다 (styles.css의 table.ranks)
+    html += '<table class="ranks' + (hasHcp ? ' hcp' : '') + '"><thead><tr><th></th><th class="l">플레이어</th><th>홀</th><th>타수</th><th>±파</th>' + (hasHcp ? '<th>네트</th>' : '') + '</tr></thead><tbody>';
     res.rows.forEach(function (p) {
       html += '<tr class="' + (me === p.id ? 'me' : '') + '"><td>' + (p.rank ? '<span class="rank r' + p.rank + '">' + p.rank + '</span>' : '') + '</td><td class="l">' + badge(p.team) + ' ' + esc(p.name) + (p.hcp ? ' <span class="muted small">H' + esc(p.hcp) + '</span>' : '') + '</td>' +
         '<td>' + p.played + '</td><td><b>' + p.gross + '</b></td><td class="' + tpClass(p.toPar) + '"><b>' + G.fmtToPar(p.toPar) + '</b></td>' +

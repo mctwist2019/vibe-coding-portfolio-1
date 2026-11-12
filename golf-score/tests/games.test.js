@@ -373,21 +373,24 @@ test('skins fund OECD with a joining amount: exactly the amount joins, one won b
 
 test('skins fund OECD with a joining amount follows the play order and goes through computeAll', () => {
   // 10번홀 출발: 10~12번홀을 이겨 6만 → 그다음에 친 13번홀부터 벌금 대상. 1번홀의 OB는 18번홀까지 친 뒤라 벌금
+  // (홀 번호 순으로 세면 1번홀은 가입 전이라 벌금이 없다: 두 순서의 결과가 달라야 순서를 따르는지 알 수 있다)
   const sc = { a: Array(18).fill(4), b: Array(18).fill(5), c: Array(18).fill(5) };
   [9, 10, 11].forEach((h) => { sc.a[h] = 3; });
   for (let h = 0; h < 18; h++) if (![9, 10, 11].includes(h)) { sc.a[h] = 5; }
   const r = mkRound([{ id: 'a', name: 'A', hcp: 0, team: '' }, { id: 'b', name: 'B', hcp: 0, team: '' }, { id: 'c', name: 'C', hcp: 0, team: '' }], sc,
-    { pars: Array(18).fill(4), stats: { a: { 0: { ob: 1 }, 12: { bk: 1 } } } });
+    { pars: Array(18).fill(4), stats: { a: { 0: { ob: 1 } } } });
   const back = [9, 10, 11, 12, 13, 14, 15, 16, 17, 0, 1, 2, 3, 4, 5, 6, 7, 8];
   const opt = Object.assign({ oecd: true, join: 60000 }, FUND);
   const inOrder = G.skins(r, Object.assign({ order: back }, opt));
-  assert.deepEqual(inOrder.holes.filter((h) => h.oecd).map((h) => [h.hole, h.oecd[0].fine]), [[12, 10000]], 'hole 13 right after joining; the fine takes a below the amount, so hole 1 is free');
+  assert.deepEqual(inOrder.holes.filter((h) => h.oecd).map((h) => [h.hole, h.oecd[0].fine]), [[0, 10000]], 'hole 1 is played after hole 18, when a is a member');
   const natural = G.skins(r, opt);
-  assert.deepEqual(natural.holes.filter((h) => h.oecd).map((h) => h.hole), [12], 'in hole-number order hole 1 comes before joining');
+  assert.deepEqual(natural.holes.filter((h) => h.oecd).map((h) => h.hole), [], 'in hole-number order hole 1 comes before joining');
   r.games = { skins: Object.assign({ enabled: true, playorder: true }, opt) };
   const all = G.computeAll(r, { order: back });
-  assert.equal(all.skins.fund.join, 60000); assert.equal(all.skins.fund.fines, 10000);
+  assert.equal(all.skins.fund.join, 60000); assert.equal(all.skins.fund.fines, 10000, 'computeAll hands the play order to skins');
   assert.equal(all.settlement.rows.reduce((t, x) => t + x.net, 0), -(all.skins.fund.caddieTotal));
+  r.games.skins.playorder = false;
+  assert.equal(G.computeAll(r, { order: back }).skins.fund.fines, 0, 'a round without the playorder stamp keeps hole-number order');
 });
 
 test('skins fund OECD: a fine never exceeds what the player holds; ties and unplayed holes', () => {

@@ -188,13 +188,23 @@
   /**
    * 예전 버전(from)에서 만든 게임 설정으로 새 라운드를 시작할 때: 그 뒤에 생긴 기본값을 준다
    * (11: 스킨스 공금 방식, 12: 니어·롱기 홀 제한과 지우개, 14: OECD 가입 기준 6만 원).
-   * 이 버전에서 만든 설정을 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다
+   * 이 버전에서 만든 설정을 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다.
+   * 가입 기준은 14보다 앞선 버전이 적은 적이 없으므로, 예전 라운드의 설정에 금액이 들어 있으면 이 버전에서 직접 넣은 것이다: 그대로 둔다
    */
   function upgradeDefaults(g, from) {
     if (from < 11) useNewSkinsDefaults(g);
     if (from < 12) useNewBonusDefaults(g);
-    if (from < 14) g.skins.join = OECD_JOIN;
+    if (from < 14 && !(g.skins.join > 0)) g.skins.join = OECD_JOIN;
     g.bonus.made = BUILD;
+    return g;
+  }
+  /**
+   * 저장된 게임 설정에 '14 이상에서 만듦' 표시는 있는데 가입 기준 칸이 아예 없으면, 예전 버전(13)인 채로 그 라운드에 참여했던 기기다
+   * (13은 모르는 가입 기준은 버리고 만든 버전 표시만 받아 둔다). 빠진 칸을 0으로 채우면 본전 기준을 고른 것처럼 보여
+   * 다음 새 라운드가 그 0을 베끼므로, 채우기 전에 표시를 13으로 낮춘다. 그 라운드의 돈(이 기기가 보여 준 본전 기준)은 바뀌지 않는다
+   */
+  function fromOldDevice(g) {
+    if (g && g.bonus && Number(g.bonus.made) >= 14 && !(g.skins && g.skins.join !== undefined)) g.bonus.made = 13;
     return g;
   }
   /** 모든 게임 계산. 홀을 친 순서(10번홀 출발 등)를 넘겨 스킨스 이월·OECD 가입·오장의 '앞 홀'이 실제 순서를 따르게 한다 (스킨스는 이 버전에서 만든 라운드만) */
@@ -213,14 +223,14 @@
     if (!s.clientId || s.clientId.length < 8) s.clientId = S.randomId(10);
     s.me = s.me || null;
     s.meSkipped = s.meSkipped || {};
-    if (s.round) { fillGames(s.round.games = s.round.games || {}); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); delete s.round.courseFrom; }
+    if (s.round) { fillGames(fromOldDevice(s.round.games = s.round.games || {})); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); delete s.round.courseFrom; }
     // 예전 버전이 저장해 둔 새 라운드 초안과 지난 라운드에는 그 뒤에 생긴 게임 설정(오장 등)이 없다. 빠진 채로 화면을 그리면 오류가 나므로 채워 둔다
     // 예전 버전에서 쓰다 만 초안은 새 라운드와 같은 스킨스 기본값(공금 방식 등)으로 맞춘다. 지난 라운드와 진행 중인 라운드는 돈 계산이 바뀌면 안 되므로 그대로 둔다
     if (s.draft && typeof s.draft === 'object') {
       var dg = s.draft.games, dfrom = madeBy(dg); // 채우기 전에 본다 (초안에 공금 방식 표시가 없으면 10, 있고 made가 없으면 11)
       upgradeDefaults(fillGames(s.draft.games = dg || {}), dfrom);
     }
-    s.history.forEach(function (hr) { if (hr && typeof hr === 'object') fillGames(hr.games = hr.games || {}); });
+    s.history.forEach(function (hr) { if (hr && typeof hr === 'object') fillGames(fromOldDevice(hr.games = hr.games || {})); });
     s.joining = null;
     s.mapZoom = null;
     // 쓰던 키워드(추가를 누르기 전의 글)는 앱을 다시 열어도 남긴다: 그 홀에 돌아오면 입력란에 보이고, 다른 곳으로 가면 그 홀의 키워드로 들어간다
@@ -1616,7 +1626,8 @@
     var me = myPid();
     var sg = r.games.stroke;
     var html = '<div class="card"><h2>순위' + (hasHcp ? '<span class="hint">' + seg('boardNet', state.boardNet, [[false, '그로스'], [true, '네트']]) + '</span>' : '') + '</h2>' +
-      ruleLine('스트로크 플레이: 파 대비 타수(±파)가 낮을수록 순위가 높아요.' + (hasHcp ? ' 네트는 핸디를 뺀 타수예요.' : '') +
+      ruleLine((hasHcp && state.boardNet ? '스트로크 플레이(네트): 핸디를 뺀 타수의 파 대비(네트 칸의 괄호)가 낮을수록 순위가 높아요.'
+        : '스트로크 플레이: 파 대비 타수(±파)가 낮을수록 순위가 높아요.' + (hasHcp ? ' 네트는 핸디를 뺀 타수예요.' : '')) +
         (sg.cap ? ' 양파 한도: 한 홀은 파의 두 배까지만 세요.' : '') +
         (sg.unit > 0 ? ' 내기는 전원이 친 홀의 ' + (sg.net ? '네트 ' : '') + '타수 차 × 타당 ' + won(sg.unit) + '을 둘씩 주고받아요.' : ''));
     // 핸디가 있으면 네트 칸까지 여섯 칸이다: 좁은 화면에서 표가 카드 밖으로 나가지 않게 칸 여백을 줄인다 (styles.css의 table.ranks)
@@ -1659,9 +1670,11 @@
     var sub = '<div class="muted small" style="margin:-4px 0 8px">' + (team ? '팀' : '개인') + (res.net ? ' · 네트' : '') +
       (f ? ' · 공금: 각자 ' + won(f.stake) + ' · 홀당 상금 ' + won(f.prize) + (f.oecd ? ' · OECD 벌금 ' + won(f.fine) : '') : (res.unit ? ' · 스킨당 ' + won(res.unit) : '')) + '</div>';
     // OECD 가입 조건: 가입 기준이 있으면 상금(벌금을 뺀 금액)이 그 금액 이상, 없으면(예전 라운드) 공금에서 받은 돈이 낸 돈 이상
-    var joinWho = f && f.join > 0 ? '상금을 ' + won(f.join) + ' 이상 받은 사람' : '공금에서 받은 돈이 낸 돈 이상이 된 사람';
-    var rule = ruleLine('홀마다 혼자 가장 적게 친 ' + (team ? '팀' : '사람') + '이 스킨을 가져가고, 동타면 다음 홀로 이월돼요.' +
-      (team ? ' 팀은 그 홀에서 가장 잘 친 한 명의 타수로 겨뤄요.' : '') +
+    var joinWho = f && f.join > 0 ? '상금으로 받은 돈(낸 벌금은 뺌)이 ' + won(f.join) + ' 이상인 사람' : '공금에서 받은 돈이 낸 돈 이상이 된 사람';
+    // 네트 여부는 설정에서 읽는다 (팀이 없어 계산하지 못한 상태에서는 res.net이 없다)
+    var skNet = !!r.games.skins.net;
+    var rule = ruleLine('홀마다 ' + (skNet ? '핸디를 뺀 타수가 혼자 가장 적은 ' : '혼자 가장 적게 친 ') + (team ? '팀' : '사람') + '이 스킨을 가져가고, 동타면 다음 홀로 이월돼요.' +
+      (team ? ' 팀은 그 홀에서 가장 잘 친 한 명의 ' + (skNet ? '핸디를 뺀 ' : '') + '타수로 겨뤄요.' : '') +
       (f ? ' 스킨 하나의 상금은 ' + won(f.prize) + '이에요(공금에서).' + (f.oecd ? ' ' + joinWho + '은 OECD 가입: 그다음 홀부터 OB · 벙커 · 해저드 · 3퍼트 · 트리플 이상마다 벌금 ' + won(f.fine) + '을 공금에 넣어요.' : '')
         : res.unit ? ' 스킨 하나에 ' + (team ? '진 팀 각자가 ' + won(res.unit) + '을 내요.' : '다른 사람 각각이 ' + won(res.unit) + '을 줘요.') : ''));
     if (res.error) return '<div class="card">' + head + sub + rule + '</div>' + teamHint(res.error + '. 설정에서 "방식"을 개인으로 바꾸거나 팀을 지정하세요.');
@@ -1790,9 +1803,10 @@
     var head = '<h2>오장 ' + moneyChip('ojang', res.enabled, !!res.error) + '<span class="hint">타당 ' + won(res.unit) + (res.net ? ' · 네트' : '') + '</span></h2>';
     var og = r.games.ojang || {}, ojCarry = og.carry !== false, ojNear = og.near !== false, ojBirdie = og.birdie !== false;
     var rule = ruleLine('홀마다 ' + (res.net ? '핸디를 뺀 ' : '') + '타수 차 × 타당 ' + won(res.unit) + '을 둘씩 주고받아요. 배판인 홀은 2배예요: 버디 이하 · 트리플 이상 · 파3 더블 이상 · 3명 이상 동타' + (ojCarry ? ' · 앞 홀 전원 동타' : '') + '.' +
-      (ojNear && ojBirdie ? ' 파3 니어(파 이하로 마쳤을 때)와 버디 이하는 다른 사람 각각에게서 1타 금액을 더 받아요.'
-        : ojNear ? ' 파3 니어는 파 이하로 마치면 다른 사람 각각에게서 1타 금액을 더 받아요.'
-          : ojBirdie ? ' 버디 이하는 다른 사람 각각에게서 1타 금액을 더 받아요.' : ''));
+      (ojNear && ojBirdie ? ' 파3 니어(파 이하로 마쳤을 때)와 버디 이하는 다른 사람 각각에게서 1타 금액을 더 받아요'
+        : ojNear ? ' 파3 니어는 파 이하로 마치면 다른 사람 각각에게서 1타 금액을 더 받아요'
+          : ojBirdie ? ' 버디 이하는 다른 사람 각각에게서 1타 금액을 더 받아요' : '') +
+      (ojNear || ojBirdie ? '(배판인 홀에서는 이것도 2배).' : ''));
     if (res.error) return '<div class="card">' + head + rule + '<div class="muted">' + esc(res.error) + '</div></div>';
     var html = '<div class="card">' + head + rule + '<table><thead><tr><th class="l">플레이어</th><th>금액</th></tr></thead><tbody>' +
       res.rows.map(function (x) {
@@ -1938,8 +1952,15 @@
       if (state.readOnly) return '<span class="chip sm ' + (en[type] ? 'active' : '') + '">' + label + '</span>';
       return '<button class="chip sm ' + (en[type] ? 'active' : '') + '" data-action="toggle-bonus" data-type="' + type + '">' + label + (en[type] ? ' ₩' : '') + '</button>';
     };
+    // 돈은 정산에 넣은 보너스(칩)만 오간다: 룰 문장도 넣은 것만 적는다
+    var paid = [];
+    if (en.nearest) paid.push('니어리스트');
+    if (en.longest) paid.push('롱기스트');
+    if (en.birdie) paid.push('버디');
     var html = '<div class="card"><h2>보너스 <span class="hint">1회당 ' + won(g.unit) + '</span></h2>' +
-      ruleLine('니어리스트 · 롱기스트 · 버디를 한 사람이 다른 사람 각각에게서 1회당 ' + won(g.unit) + '을 받아요. 이글 이상은 2배예요.' +
+      ruleLine((paid.length ? paid.join(' · ') + '를 한 사람이 다른 사람 각각에게서 1회당 ' + won(g.unit) + '을 받아요.' + (en.birdie ? ' 이글 이상은 2배예요.' : '')
+        : '니어리스트 · 롱기스트 · 버디 횟수만 세고, 정산에 넣은 보너스는 없어요.' +
+          (state.readOnly ? '' : ' 아래 칩을 눌러 넣으면 그 보너스를 한 사람이 다른 사람 각각에게서 1회당 ' + won(g.unit) + '을 받아요(이글 이상은 2배).')) +
         (res.rules.eraser ? ' 지우개: 파3에서 그린에 못 올린 사람이 파 이하로 마치면 그 홀의 니어를 지워요.' : '')) +
       '<div class="chips" style="margin-bottom:10px">' + chip('nearest', '니어리스트') + chip('longest', '롱기스트') + chip('birdie', '버디/이글') + '</div>' +
       '<table class="bonus"><thead><tr><th class="l">플레이어</th><th>니어</th><th>롱기</th><th>버디</th><th>이글+</th>' + (anyMoney ? '<th>금액</th>' : '') + '</tr></thead><tbody>';

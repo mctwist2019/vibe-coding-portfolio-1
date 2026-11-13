@@ -496,7 +496,7 @@
   }
 
   return {
-    BUILD: 18, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 19, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     OB_COST: OB_COST, HZ_COST: HZ_COST, HAZ: HAZ, HAZ_LABELS: HAZ_LABELS, SHAPE_LABELS: SHAPE_LABELS, setShapeSource: setShapeSource, setInfoFallback: setInfoFallback,
     HAZ_GROUPS: HAZ_GROUPS, hazLabels: hazLabels, MEMO_SEP: MEMO_SEP, memoWords: memoWords, setMemoUpgrades: setMemoUpgrades,
     stat: stat, playOrder: playOrder, playerStats: playerStats, roundStatus: roundStatus, coach: coach, teeMissSide: teeMissSide,

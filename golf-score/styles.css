@@ -356,6 +356,10 @@ details.adv[open] summary::before { content: '▾ '; }
 .mini:disabled { opacity: .35; }
 .chip.num { min-width: 40px; }
 @media (max-width: 400px) { .detail-body { gap: 8px 6px; } .mini { width: 34px; } .stp .lab { flex-basis: 40px; } }
+/* 좁은 화면(360px 미만): 나란히 놓인 두 칸(OB · 해저드)이 카드 안에 들어가도록 버튼과 간격을 조금 더 줄인다.
+   칸 폭은 344px 화면에서 141px, 320px 화면에서 129px이다 (이름 40 + 버튼 2개 + 숫자 18 + 간격 5×3) */
+@media (max-width: 359px) { .detail-body .stp { gap: 5px; } .detail-body .mini { width: 30px; } .detail-body .stp .n { min-width: 18px; } }
+@media (max-width: 340px) { .detail-body .mini { width: 28px; } }
 
 /* ── 코치 한마디 · 경기 분석 ── */
 .coachline { display: flex; gap: 8px; font-size: 14px; line-height: 1.45; }

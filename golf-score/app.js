@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 18;
+  var BUILD = 19;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -231,6 +231,9 @@
     s.me = s.me || null;
     s.meSkipped = s.meSkipped || {};
     if (s.round) { fillGames(s.round.games = s.round.games || {}); s.round.status = s.round.status || 'live'; s.round.rev = s.round.rev || {}; S.ensureScores(s.round); delete s.round.courseFrom; }
+    // 공유 종료가 끝나기 전에 앱이 닫혔으면(죽은 연결에서 눌렀을 때) 진행 중인 라운드에 'closed'가 남아 있다. 다시 연결하면 그 값이 방에 전해져 참가자의 공유를 끊으므로 되돌린다.
+    // 수정 기록은 그대로 둔다(참가자가 'closed'를 받았을 때와 같다): 새로 찍으면 앱을 닫아 둔 사이에 누가 누른 라운드 종료를 이겨 버린다
+    if (s.round && s.round.status === 'closed') s.round.status = 'live';
     // 예전 버전이 저장해 둔 새 라운드 초안과 지난 라운드에는 그 뒤에 생긴 게임 설정(오장 등)이 없다. 빠진 채로 화면을 그리면 오류가 나므로 채워 둔다
     // 예전 버전에서 쓰다 만 초안은 새 라운드와 같은 스킨스 기본값(공금 방식 등)으로 맞춘다. 지난 라운드와 진행 중인 라운드는 돈 계산이 바뀌면 안 되므로 그대로 둔다
     if (s.draft && typeof s.draft === 'object') {
@@ -371,6 +374,7 @@
         getRound: function () { return state.joining && state.joining.code === code ? null : findRoundByCode(code); },
         onApply: function (changed) { onRemoteApply(code, changed); },
         onSnapshot: handlers && handlers.onSnapshot,
+        onClosed: function () { onRoomClosed(code); },
         onStatus: function (s, detail) { onSessionStatus(code, s, detail); },
         onPeers: function (list) { peers = list; softRender(); },
         onReady: function () { syncReady = true; softRender(); },
@@ -378,8 +382,8 @@
         onConflict: function () { state.syncConflict = true; softRender(); },
         onSkew: function (ms) { skewMs = ms; }
       });
-      // 예전 버전에서 고른 출발 홀(앱을 열 때 변경 표시를 찍은 것)을 한 번 보낸다. 서버에 남은 스냅샷이 내가 올린 것이면 그 에코는 무시되므로,
-      // 스냅샷에 없는 키가 있다는 것을 세션이 스스로 알아채지 못한다
+      // 예전 버전에서 고른 출발 홀(앱을 열 때 변경 표시를 찍은 것)을 한 번 보낸다. 서버에 남은 내 스냅샷에 없는 키는 세션도 스스로 알아채 다시 올리지만
+      // (hasNewerThan), 여기서 알려 두면 함께 보는 기기에 스냅샷을 기다리지 않고 바로 전해진다
       if (oldStartChoice && state.round && state.round.share && state.round.share.code === code) { oldStartChoice = false; session.markDirty(['start']); }
       session.start();
     }).catch(function () {
@@ -431,6 +435,23 @@
       }
     }
     save(); softRender();
+  }
+  /** 서버에 호스트의 '공유 종료' 표시가 남아 있는 방에 연결했다: 종료할 때 방에 없던 기기(나가 있었거나 화면이 꺼져 있었거나 앱을 닫아 둔 기기)가 돌아온 경우 */
+  function onRoomClosed(code) {
+    if (state.joining && state.joining.code === code) { // 라운드 없이 참여하려던 기기: 서버에 종료된 스냅샷이 남아 있던 경우(adoptSnapshot)와 같게
+      var idx = scan ? scan.idx : state.joining.b;
+      clearScan(); closeSession();
+      state.joining = { code: code, status: 'timeout', b: idx };
+      save(); render(); toast('호스트가 이미 종료한 공유예요.');
+      return;
+    }
+    var r = findRoundByCode(code);
+    if (!r || !r.share || r.share.host === state.clientId) return;
+    clearScan(); closeSession(); r.share.active = false;
+    // 기록에서 되살린 라운드에 예전 공유 종료의 'closed'가 남아 있으면 참가자가 종료를 받았을 때처럼 되돌린다 (onRemoteApply)
+    if (r === state.round && r.status === 'closed') { r.status = 'live'; resetBaseline(); }
+    save(); render();
+    if (r === state.round) toast('호스트가 공유를 종료했어요. 점수는 내 기기에 남아요.');
   }
   function ensureSession() {
     if (sharingActive()) {
@@ -493,6 +514,9 @@
     var r = state.round;
     clearScan(); closeSession();
     if (r && r.share) r.share.active = false;
+    // 공유 종료(endSharingOnServer)가 죽은 연결에서 끝나지 못한 채 공유를 멈추면 'closed'가 남는다. 서버 삭제에 실패했을 때처럼 되돌린다:
+    // 그대로 같은 방에 돌아가면 그 'closed'가 방에 전해져 참가자의 공유를 끊고, 이 기기는 아무도 들어올 수 없는 방을 공유 중으로 보여 준다
+    if (r && r.status === 'closed') r.status = 'live';
     save(); render();
   }
   function endSharingOnServer() {
@@ -619,7 +643,9 @@
   }
   function finishedBanner(r) {
     if (!r || r.status !== 'finished' || state.readOnly) return '';
-    return '<div class="notice"><b>라운드가 종료되었습니다.</b> 함께하는 참여자가 라운드 종료를 눌렀어요. 정산을 확인하고 기록으로 저장하세요. ' +
+    // 종료를 누른 기기가 코드나 링크로 그 방에 다시 들어오면(joinRoom) 이 라운드가 진행 중인 라운드로 돌아온다: 그때는 '참여자가 눌렀다'고 하지 않는다
+    var mine = !!(r.rev && r.rev.status && r.rev.status.by === state.clientId);
+    return '<div class="notice"><b>라운드가 종료되었습니다.</b> ' + (mine ? '' : '함께하는 참여자가 라운드 종료를 눌렀어요. ') + '정산을 확인하고 기록으로 저장하세요. ' +
       '<div class="row" style="margin-top:8px"><button class="btn sm primary" data-action="archive-now">기록으로 저장</button><button class="btn sm" data-action="tab-settle">정산 보기</button></div></div>';
   }
   function inAppBanner(code, b) {
@@ -3229,10 +3255,12 @@
   window.addEventListener('online', wakeSession);
   // 화면을 돌리거나 폭이 바뀌면 요약 줄 맞춤을 다시 보고, 리더보드에서는 고른 탭이 줄 밖으로 나가지 않게 한다.
   // 높이만 바뀐 경우(폰 브라우저의 주소창이 숨거나 나올 때)에는 탭 줄을 건드리지 않는다: 다른 탭을 보려고 밀어 둔 줄이 되돌아가면 안 된다
-  var seenWidth = document.documentElement.clientWidth;
+  // 화면 폭은 배치 폭과 창 폭이 둘 다 바뀌었을 때만 바뀐 것으로 본다: 스크롤바가 자리를 차지하는 PC 브라우저에서는 화면이 길어져
+  // 스크롤바가 생기는 것만으로 배치 폭이 줄어들기 때문에(resize 없이), 배치 폭만 보면 그다음의 높이 변화를 폭 변화로 잘못 안다
+  var seenWidth = document.documentElement.clientWidth, seenOuter = window.innerWidth;
   window.addEventListener('resize', function () {
-    var w = document.documentElement.clientWidth, strip = w !== seenWidth ? $app.querySelector('.tabs') : null;
-    seenWidth = w;
+    var w = document.documentElement.clientWidth, o = window.innerWidth, strip = w !== seenWidth && o !== seenOuter ? $app.querySelector('.tabs') : null;
+    seenWidth = w; seenOuter = o;
     fitSummary();
     if (strip) keepTabStrip(strip.scrollLeft, null);
   });

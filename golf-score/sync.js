@@ -547,7 +547,7 @@
   /**
    * opts: { mqtt, code, broker(url), clientId(기기 id), tabId?, name, clock?, getRound,
    *         onApply(changedKeys, msg), onSnapshot(keys), onStatus(status, detail), onPeers(list),
-   *         onReady(), onError(err), onConflict(meta), onSkew(ms) }
+   *         onReady(), onError(err), onConflict(meta), onSkew(ms), onClosed() }
    * 상태: connecting | connected | offline | idle | error
    */
   function createSession(opts) {
@@ -560,6 +560,7 @@
     var peers = {}, displayName = opts.name || '';
     var hydrated = false, gotRetained = false, seededEarly = false, ready = false, lastSyncAt = 0, reconnectPeriod = 2000;
     var seenHello = {};
+    var ownChecked = false; // 서버에 남은 내 스냅샷을 이 세션에서 이미 지금의 라운드와 견줘 봤는지
     function setReady() { if (!ready) { ready = true; if (opts.onReady) opts.onReady(); } }
 
     function setStatus(s, detail) { status = s; if (opts.onStatus) opts.onStatus(s, detail); }
@@ -695,6 +696,11 @@
         return;
       }
       open(cryptoKey, text).then(function (msg) {
+        // 호스트가 공유를 종료하며 남긴 표시 (라운드 자료 없음, clearRetained). 서버에 남아 있던 것을 받았고 내가 남긴 것이 아닐 때만 앱에 알린다:
+        // 그때 방에 없던 기기가 돌아와서 빈 방으로 알고 제 사본을 다시 올리지 않게 한다. 종료한 호스트 자신에게는 빈 방과 같아서 같은 코드로 다시 열 수 있다.
+        // 그때 방에 있던 기기는 종료 직전의 스냅샷(status 'closed')으로 이미 알았으므로, 실시간으로 지나가는 표시에는 반응하지 않는다.
+        // 이 표시를 모르는 예전 버전은 keys가 없는 메시지로 보고 무시한다 (전과 같다)
+        if (msg && msg.t === 'closed') { if (retained && msg.from !== clientId) { gotRetained = true; if (opts.onClosed) opts.onClosed(); } return; }
         if (!msg || !msg.keys || typeof msg.keys !== 'object') return;
         if (msg.re) seenHello[cleanStr(msg.re, 12)] = 1;
         var round = currentRound();
@@ -705,7 +711,12 @@
           // 다른 기기의 옛 스냅샷을 받았을 때 다시 올리는 것(아래 localNewer)과 같은 규칙이다
           if (msg.t === 'snap' && retained) {
             gotRetained = true;
-            if ((!msg.rid || msg.rid === round.id) && hasNewerThan(round, msg.keys)) { dirty = true; if (hydrated) scheduleSnapshot(); }
+            // 세션마다 한 번만 견준다: 그 뒤에 이 세션에서 바뀐 값은 dirty가 기억한다. 다시 연결될 때마다 견주면, 같은 접속 id를 쓰는
+            // 이 기기의 다른 화면(복제한 탭)과 서로 연결을 끊어 가며 서로의 스냅샷을 옛것으로 보고 끝없이 다시 올린다
+            if (!ownChecked && (!msg.rid || msg.rid === round.id)) {
+              ownChecked = true;
+              if (hasNewerThan(round, msg.keys)) { dirty = true; if (hydrated) scheduleSnapshot(); }
+            }
             setReady();
           }
           return;
@@ -812,10 +823,10 @@
       try { c.end(false, {}, function () { if (!forced) clearTimeout(t); }); } catch (e2) { clearTimeout(t); try { c.end(true); } catch (e3) { /* ignore */ } }
     }
 
-    /** 서버의 retained 스냅샷/내 presence 삭제 (호스트가 공유 종료 시) */
+    /** 서버의 retained 스냅샷/내 presence 삭제 (호스트가 공유 종료 시). 스냅샷 자리에는 라운드 자료가 없는 '종료' 표시만 남긴다 (handleMessage) */
     function clearRetained() {
       if (!isConnected()) return Promise.resolve(false);
-      return rawPublish('/s', '', { qos: 1, retain: true }).then(function (ok1) {
+      return publish('/s', { t: 'closed', from: clientId }, { qos: 1, retain: true }).then(function (ok1) {
         return rawPublish('/p/' + clientId, '', { qos: 0, retain: true }).then(function (ok2) { return ok1 && ok2; });
       });
     }
@@ -963,7 +974,7 @@
   }
 
   return {
-    BUILD: 18, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 19, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     ALPHABET: ALPHABET, CODE_LEN: CODE_LEN, BROKERS: BROKERS, TOPIC_ROOT: TOPIC_ROOT, GAME_SCHEMA: GAME_SCHEMA, STAT_FIELDS: STAT_FIELDS, HOLE_FIELDS: HOLE_FIELDS, HAZ_BITS: HAZ_BITS, MEMO_MAX: MEMO_MAX, COURSE_MAX: COURSE_MAX, TEAMS: TEAMS, MAX_FUTURE: MAX_FUTURE,
     cryptoAvailable: cryptoAvailable,
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,

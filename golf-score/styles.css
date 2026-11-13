@@ -47,6 +47,8 @@ table.fund th, table.fund td { padding-left: 3px; padding-right: 3px; }
 table.fund td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
 /* 종합 순위 표: 이름은 줄바꿈을 허용하고, 네트 칸이 있으면(여섯 칸) 칸 여백을 줄인다. 안 그러면 좁은 화면에서 표가 카드와 화면 밖으로 나간다 */
 table.ranks td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
+/* 베스트볼의 팀 표: 팀원 이름이 한 줄에 다 들어가지 않으면 줄을 바꾼다 (여덟 명이면 좁은 화면에서 표가 카드와 화면 밖으로 나갔다) */
+table.teams td.l { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
 table.ranks.hcp th, table.ranks.hcp td { padding-left: 3px; padding-right: 3px; }
 /* 팀 매치의 홀별 베스트 표: 홀 칸은 좁게, 두 팀 칸은 같은 너비. 이름은 줄바꿈을 허용하고, 이긴 팀의 칸은 위 점 표시와 같은 색의 굵은 글씨 */
 table.best { table-layout: fixed; }

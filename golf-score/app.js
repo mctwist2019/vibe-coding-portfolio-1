@@ -2025,7 +2025,7 @@
     var rule = ruleLine('팀에서 그 홀을 가장 잘 친 ' + (res.count > 1 ? res.count + '명의 ' + (res.net ? '핸디를 뺀 ' : '') + '타수 합이' : '한 명의 ' + (res.net ? '핸디를 뺀 ' : '') + '타수가') + ' 팀 점수예요. 팀 점수가 혼자 가장 낮은 팀이 그 홀을 이겨요.' +
       (res.unit ? ' 홀마다 진 팀 각자가 ' + won(res.unit) + '을 내고 이긴 팀이 나눠 가져요.' : ''));
     if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '.');
-    var html = '<div class="card">' + head + rule + '<table><thead><tr><th class="l">팀</th><th>팀 타수</th><th>±파</th><th>홀 승</th></tr></thead><tbody>';
+    var html = '<div class="card">' + head + rule + '<table class="teams"><thead><tr><th class="l">팀</th><th>팀 타수</th><th>±파</th><th>홀 승</th></tr></thead><tbody>';
     res.teams.forEach(function (t) {
       html += '<tr><td class="l">' + badge(t.id) + ' <span class="muted small">' + t.pids.map(function (pid) { return esc(nameOf(r, pid)); }).join(', ') + '</span></td><td><b>' + t.total + '</b></td><td class="' + tpClass(t.toPar) + '"><b>' + G.fmtToPar(t.toPar) + '</b></td><td>' + t.holesWon + '</td></tr>';
     });
@@ -2750,13 +2750,15 @@
   }
   /**
    * 리더보드의 탭 줄: 화면을 다시 그리면 옆으로 밀어 둔 위치가 맨 왼쪽으로 돌아가서, 뒤쪽 탭을 고를 때마다 줄을 다시 밀어야 했다.
-   * 그리기 전의 위치(x)를 되돌리고, 고른 탭이 줄 끝에 걸쳐 있으면 다 보이게 민다 (옆 탭이 조금 보이도록 여유를 둔다)
+   * 그리기 전의 위치(x)를 되돌린다. 고른 탭을 보이는 자리로 데려오는 것(줄 끝에서 36px 안쪽까지: 옆 탭이 조금 보이게)은
+   * 탭을 눌렀을 때, 탭 줄이 새로 생겼을 때(다른 화면에서 옴 · 앱을 다시 엶), 탭 줄의 내용이 바뀌었을 때(게임을 켜고 끔)만 한다.
+   * was: 그리기 전 탭 줄의 내용. 그대로면(동반자의 점수가 들어와 다시 그린 경우 등) 위치만 되돌린다: 다른 탭을 보려고 줄을 밀어 둔 것을 되돌리지 않는다
    */
-  function keepTabStrip(x) {
+  function keepTabStrip(x, was) {
     var strip = $app.querySelector('.tabs'), cur = strip && strip.querySelector('button.active');
     if (!strip) return;
     if (x) strip.scrollLeft = x;
-    if (!cur) return;
+    if (!cur || strip.innerHTML === was) return;
     var sr = strip.getBoundingClientRect(), cr = cur.getBoundingClientRect(), peek = 36;
     if (cr.left < sr.left + peek) strip.scrollLeft += cr.left - sr.left - peek;
     else if (cr.right > sr.right - peek) strip.scrollLeft += cr.right - sr.right + peek;
@@ -2773,9 +2775,10 @@
     if (!same || wraps.length !== xs.length) return;
     for (var i = 0; i < wraps.length; i++) if (xs[i]) wraps[i].scrollLeft = xs[i];
   }
-  function render() {
+  /** showTab: 탭을 눌러서 다시 그리는 것이면 true (고른 탭을 보이는 자리로 데려온다: keepTabStrip) */
+  function render(showTab) {
     var y = window.scrollY, mz = $app.querySelector('.mapzoom'), my = mz ? mz.scrollTop : 0; // 약도 크게 보기 창은 따로 스크롤된다
-    var tabs0 = $app.querySelector('.tabs'), tabsX = tabs0 ? tabs0.scrollLeft : 0;
+    var tabs0 = $app.querySelector('.tabs'), tabsX = tabs0 ? tabs0.scrollLeft : 0, tabsWas = tabs0 && showTab !== true ? tabs0.innerHTML : null;
     var wrapsX = [].map.call($app.querySelectorAll('.tablewrap'), function (w) { return w.scrollLeft; }), sig0 = drawnSig;
     var keep = setupAnchorTop(), bar = keep === null ? null : $app.querySelector('.topbar'), lim = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
     var whole = keep !== null && setupAnchorTop(true) <= lim; // 카드가 통째로 화면 위로 지나갔으면 카드의 아랫변을 기준으로 삼는다
@@ -2790,7 +2793,7 @@
     if (dy) window.scrollBy(0, dy);
     if (mz && my) mz.scrollTop = my;
     centerHoleStrip();
-    keepTabStrip(tabsX);
+    keepTabStrip(tabsX, tabsWas);
     drawnSig = screenSig();
     keepWraps(wrapsX, sig0 === drawnSig);
     fitSummary();
@@ -2899,7 +2902,7 @@
       var r = state.round; if (!r || ['nearest', 'longest', 'birdie'].indexOf(d.type) < 0) return;
       r.games.bonus[d.type] = !r.games.bonus[d.type]; save(); render();
     },
-    tab: function (d) { state.boardTab = d.tab; save(); render(); },
+    tab: function (d) { state.boardTab = d.tab; save(); render(true); },
     'tab-settle': function () { state.boardTab = 'settle'; go('board'); },
     hole: function (d) { var i = Number(d.i); if (i >= 0 && i < state.round.holes) { state.round.currentHole = i; save(); render(); } },
     score: function (d) {
@@ -3210,7 +3213,8 @@
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') wakeSession(); });
   window.addEventListener('pageshow', function (e) { if (e.persisted) wakeSession(); });
   window.addEventListener('online', wakeSession);
-  window.addEventListener('resize', fitSummary); // 화면을 돌리거나 폭이 바뀌면 요약 줄 맞춤을 다시 본다
+  // 화면을 돌리거나 폭이 바뀌면 요약 줄 맞춤을 다시 보고, 리더보드에서는 고른 탭이 줄 밖으로 나가지 않게 한다
+  window.addEventListener('resize', function () { fitSummary(); var strip = $app.querySelector('.tabs'); if (strip) keepTabStrip(strip.scrollLeft, null); });
   window.addEventListener('offline', function () { softRender(); });
   window.addEventListener('beforeunload', function () { if (session) session.stop(); });
   setInterval(function () { if (sharingActive() && state.view === 'share') softRender(); }, 10000); // '마지막 동기화 n초 전' 갱신

@@ -964,7 +964,7 @@
   }
 
   return {
-    BUILD: 17, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
+    BUILD: 18, // 앱 버전(sw.js의 캐시 번호와 같다). app.js가 파일들의 짝이 맞는지 확인하는 데 쓴다
     defaultStrokeIndex: defaultStrokeIndex,
     defaultPars: defaultPars,
     strokesPerHole: strokesPerHole,

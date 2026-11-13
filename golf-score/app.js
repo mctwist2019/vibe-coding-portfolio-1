@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 17;
+  var BUILD = 18;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -1959,7 +1959,7 @@
 
   /**
    * now: 진행 중인 매치의 지금까지 금액 (매치 탭에서만 넣는다)
-   * tally: 두 쪽이 이긴 홀 수를 '이긴 홀 3 : 4'로 적는다 (팀 매치). 왼쪽 수가 왼쪽 팀, 색은 아래 점 표시와 같다.
+   * tally: 두 쪽이 이긴 홀 수를 '이긴 홀 3 : 4'로 적는다 (팀 매치와 팀 나소의 판마다). 왼쪽 수가 왼쪽 팀, 색은 아래 점 표시와 같다.
    *        승부가 일찍 갈린 매치(3&2 등)는 갈린 홀까지만 센다: 점 표시와 같은 홀들이다. 줄은 0 : 0일 때도 둔다 (상자 높이가 변하지 않게)
    */
   function matchBox(m, st, extra, now, tally) {
@@ -2024,7 +2024,7 @@
         m.segments.map(function (s) {
           // 내기 시작 홀 때문에 한 홀도 남지 않은 판은 겨루지 않는다
           if (s.empty) return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div><div class="matchbox none"><div class="st"><small>내기 시작 전이라 이 판은 겨루지 않아요</small></div></div>';
-          return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div>' + matchBox(m, s.status, s.money && res.enabled ? won(s.money) : null);
+          return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div>' + matchBox(m, s.status, s.money && res.enabled ? won(s.money) : null, null, nteam);
         }).join('') + '</div></div>' +
         (nteam ? matchBestCard(r, m, res.net) : '');
     }).join('');

@@ -450,6 +450,21 @@
     return false;
   }
 
+  /**
+   * 이 라운드에 스냅샷(keys)보다 새로운 값이 있는지: 스냅샷에 없는 키이거나, 수정 기록이 더 새로운 키.
+   * 수정 기록이 없는 키(ts 0: 예전 버전에서 넘어와 빈칸만 채워진 설정 등)는 '바꾼 값'이 아니므로 세지 않는다
+   */
+  function hasNewerThan(round, keys) {
+    var mine = exportKeys(round);
+    keys = keys && typeof keys === 'object' ? keys : {};
+    return Object.keys(mine).some(function (k) {
+      var loc = mine[k], inc = keys[k];
+      if (k === 'meta' || !(loc.ts > 0)) return false;
+      if (!inc || typeof inc !== 'object') return true;
+      return newer(loc, { ts: typeof inc.ts === 'number' && isFinite(inc.ts) ? inc.ts : 0, by: cleanStr(inc.by, 32) });
+    });
+  }
+
   /** 스냅샷으로부터 새 라운드 생성 (참여자가 처음 들어올 때) */
   function roundFromSnapshot(keys, defaults) {
     var meta = keys && keys.meta && keys.meta.v;
@@ -684,8 +699,15 @@
         if (msg.re) seenHello[cleanStr(msg.re, 12)] = 1;
         var round = currentRound();
         if (msg.from === clientId && round) {
-          // 내 메시지의 에코: 라운드가 있으면 무시 (내 retained 스냅샷이 서버에 있다는 사실만 기록)
-          if (msg.t === 'snap' && retained) { gotRetained = true; setReady(); }
+          // 내 메시지의 에코: 라운드가 있으면 값은 받지 않는다 (내 retained 스냅샷이 서버에 있다는 사실만 기록).
+          // 다만 서버에 남은 내 스냅샷이 지금의 라운드보다 옛것이면 다시 올린다. 공유를 멈춘 동안 넣은 값이나,
+          // 연결이 끊긴 채 넣고 앱을 닫은 값이 그렇다: 그러지 않으면 누군가 다음 값을 넣을 때까지 다른 기기가 받지 못한다.
+          // 다른 기기의 옛 스냅샷을 받았을 때 다시 올리는 것(아래 localNewer)과 같은 규칙이다
+          if (msg.t === 'snap' && retained) {
+            gotRetained = true;
+            if ((!msg.rid || msg.rid === round.id) && hasNewerThan(round, msg.keys)) { dirty = true; if (hydrated) scheduleSnapshot(); }
+            setReady();
+          }
           return;
         }
         // 라운드가 없으면(삭제 후 재참여 등) 내 예전 스냅샷도 다른 기기의 것과 똑같이 채택
@@ -947,7 +969,7 @@
     randomCode: randomCode, normalizeCode: normalizeCode, isValidCode: isValidCode, formatCode: formatCode, randomId: randomId,
     createClock: createClock, maxRevTs: maxRevTs, cleanPid: cleanPid, isReservedPid: isReservedPid,
     getKey: getKey, setKey: setKey, allKeys: allKeys, exportKeys: exportKeys, project: project, diffAndStamp: diffAndStamp,
-    stampAll: stampAll, stamp: stamp, merge: merge, hasKeysMissingFrom: hasKeysMissingFrom, roundFromSnapshot: roundFromSnapshot, ensureScores: ensureScores,
+    stampAll: stampAll, stamp: stamp, merge: merge, hasKeysMissingFrom: hasKeysMissingFrom, hasNewerThan: hasNewerThan, roundFromSnapshot: roundFromSnapshot, ensureScores: ensureScores,
     deriveRoom: deriveRoom, seal: seal, open: open, parseBrokerUrl: parseBrokerUrl,
     createSession: createSession,
     COURSE_FORMAT: COURSE_FORMAT, COURSE_FILE_MAX: COURSE_FILE_MAX, readCourseFile: readCourseFile, makeCourseFile: makeCourseFile, courseSig: courseSig

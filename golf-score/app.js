@@ -2871,6 +2871,8 @@
         // 이 버전에서 만든 라운드를 베낄 때는 본인이 고른 값(끈 것 포함)을 그대로 따른다
         state.draft.games = upgradeDefaults(fillGames(clone(prev.games || {})), copiedFrom(prev));
         state.draft.games.skins.playorder = true;
+        // 내기 시작 홀은 이어받지 않는다: 그날의 동반자에 따라 정하는 값이라 새 라운드는 늘 '처음부터'로 시작한다
+        state.draft.games.stroke.from = 1;
         state.draft.holes = prev.holes;
         if (state.draft.holes !== 18) state.draft.games.nassau.enabled = false; // 나소는 18홀 전용
       }

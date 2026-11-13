@@ -563,7 +563,9 @@
       var own = S.exportKeys(dup);
       // 버린 라운드의 진행 상태는 합치지 않고 전처럼 방의 상태를 따른다: 공유 종료는 status에 새 수정 기록을 찍으므로(closed → live),
       // 합치면 그 뒤에 들어간 방의 라운드가 이미 종료된 것이어도 이 기기의 '진행 중'이 이겨서 종료된 라운드가 다시 열린다
-      if (replaced) delete own.status;
+      // 이 기기의 사본에 남아 있는 'closed'(공유 종료 도중에 연결이 끊겼거나, 종료한 기록이 호스트의 공유 종료를 받은 경우)도 합치지 않는다:
+      // 'closed'는 그 공유가 끝났다는 표시이지 라운드의 상태가 아니다. 합치면 살아 있는 방을 '이미 종료한 공유'로 거절하고 그 사본까지 잃는다
+      if (replaced || (own.status && own.status.v === 'closed')) delete own.status;
       mine = S.merge(r, own).changed;
       if (dup.courseApplied) r.courseApplied = dup.courseApplied;
     }

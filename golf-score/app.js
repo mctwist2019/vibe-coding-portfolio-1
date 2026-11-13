@@ -1446,7 +1446,8 @@
     html += '<div class="screen">';
     html += '<div class="card"><h2>라운드 정보</h2><div class="stack">' +
       '<div class="field"><label>라운드 / 골프장 이름</label><input type="text" data-bind="draft.name" value="' + esc(d.name) + '" placeholder="예: 주말 라운딩 @ ○○CC" maxlength="60"></div>' +
-      '<div class="row"><div class="field grow"><label>날짜</label><input type="date" data-bind="draft.date" value="' + esc(d.date) + '"></div>' +
+      // min-width:0: 좁은 폰(320~344px)에서 날짜 칸이 줄어들지 못해 홀 수 선택이 카드 밖으로 밀려났다
+      '<div class="row"><div class="field grow" style="min-width:0"><label>날짜</label><input type="date" data-bind="draft.date" value="' + esc(d.date) + '"></div>' +
       '<div class="field"><label>홀 수</label>' + seg('draft.holes', d.holes, [[9, '9홀'], [18, '18홀']]) + '</div></div>' +
       '<div class="field"><label>코스 <span class="muted">(선택)</span></label><input type="text" data-bind="draft.course" value="' + esc(d.course || '') + '" placeholder="예: 베어크리크 포천 · 베어" maxlength="' + S.COURSE_MAX + '" autocomplete="off">' +
       (function () {
@@ -1729,7 +1730,8 @@
     if (r.games.stroke.unit > 0 && all.stroke.transfers.length) {
       html += '<div class="card"><h2>스트로크 내기 <span class="hint">타당 ' + won(r.games.stroke.unit) + ' · 전원 완료 홀 기준</span></h2>' +
         all.stroke.transfers.map(function (t) { return '<div class="payline"><span>' + esc(nameOf(r, t.from)) + ' → ' + esc(nameOf(r, t.to)) + ' <span class="muted small">' + esc(t.note) + '</span></span><span class="amt">' + won(t.amount) + '</span></div>'; }).join('') + '</div>';
-    } else if (!state.readOnly) {
+    } else if (!state.readOnly && !(r.games.stroke.unit > 0)) {
+      // 타당 금액이 있는데 아직 주고받을 것이 없을 때(내기 시작 홀 전 · 동타)는 이 안내를 내지 않는다: 위의 규칙 줄에 금액이 이미 적혀 있다
       html += '<div class="muted small center">타당 금액을 설정하면 스트로크 내기도 정산돼요.</div>';
     }
     return html + holeScoresCard(r, res);
@@ -2753,7 +2755,8 @@
   /**
    * 리더보드의 탭 줄: 화면을 다시 그리면 옆으로 밀어 둔 위치가 맨 왼쪽으로 돌아가서, 뒤쪽 탭을 고를 때마다 줄을 다시 밀어야 했다.
    * 그리기 전의 위치(x)를 되돌린다. 고른 탭을 보이는 자리로 데려오는 것(줄 끝에서 36px 안쪽까지: 옆 탭이 조금 보이게)은
-   * 탭을 눌렀을 때, 탭 줄이 새로 생겼을 때(다른 화면에서 옴 · 앱을 다시 엶), 탭 줄의 내용이 바뀌었을 때(게임을 켜고 끔)만 한다.
+   * 탭을 눌렀을 때, 탭 줄이 새로 생겼을 때(다른 화면에서 옴 · 앱을 다시 엶), 탭 줄의 내용이 바뀌었을 때(게임을 켜고 끔),
+   * 화면 폭이 바뀌었을 때(화면을 돌림: 아래의 resize 처리)만 한다.
    * was: 그리기 전 탭 줄의 내용. 그대로면(동반자의 점수가 들어와 다시 그린 경우 등) 위치만 되돌린다: 다른 탭을 보려고 줄을 밀어 둔 것을 되돌리지 않는다
    */
   function keepTabStrip(x, was) {
@@ -3215,8 +3218,15 @@
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') wakeSession(); });
   window.addEventListener('pageshow', function (e) { if (e.persisted) wakeSession(); });
   window.addEventListener('online', wakeSession);
-  // 화면을 돌리거나 폭이 바뀌면 요약 줄 맞춤을 다시 보고, 리더보드에서는 고른 탭이 줄 밖으로 나가지 않게 한다
-  window.addEventListener('resize', function () { fitSummary(); var strip = $app.querySelector('.tabs'); if (strip) keepTabStrip(strip.scrollLeft, null); });
+  // 화면을 돌리거나 폭이 바뀌면 요약 줄 맞춤을 다시 보고, 리더보드에서는 고른 탭이 줄 밖으로 나가지 않게 한다.
+  // 높이만 바뀐 경우(폰 브라우저의 주소창이 숨거나 나올 때)에는 탭 줄을 건드리지 않는다: 다른 탭을 보려고 밀어 둔 줄이 되돌아가면 안 된다
+  var seenWidth = document.documentElement.clientWidth;
+  window.addEventListener('resize', function () {
+    var w = document.documentElement.clientWidth, strip = w !== seenWidth ? $app.querySelector('.tabs') : null;
+    seenWidth = w;
+    fitSummary();
+    if (strip) keepTabStrip(strip.scrollLeft, null);
+  });
   window.addEventListener('offline', function () { softRender(); });
   window.addEventListener('beforeunload', function () { if (session) session.stop(); });
   setInterval(function () { if (sharingActive() && state.view === 'share') softRender(); }, 10000); // '마지막 동기화 n초 전' 갱신

@@ -264,6 +264,8 @@ tr.me td { font-weight: 700; }
 .matchbox .st { text-align: center; font-weight: 800; font-size: 18px; }
 .matchbox .st small { display: block; font-size: 11px; font-weight: 600; color: var(--muted); }
 .matchbox .st small.now { font-size: 12px; font-weight: 700; color: var(--primary); } /* 진행 중인 매치의 지금까지 금액 */
+.matchbox .st small.tally { font-size: 13px; font-weight: 700; color: var(--text, #1c2520); margin: 1px 0 2px; white-space: nowrap; } /* 팀 매치: 이긴 홀 3 : 4 (색은 점 표시와 같다) */
+.matchbox .st small.tally b { font-size: 15px; font-weight: 800; } .matchbox .st small.tally b.a { color: var(--team-A); } .matchbox .st small.tally b.b { color: var(--team-B); }
 .matchbox.none { grid-template-columns: 1fr; } /* 내기 시작 홀 때문에 겨루지 않는 나소의 판 */
 /* 내기 시작 홀: 설정 카드의 직접 고르기(−, N번째 홀부터, ＋)와 리더보드의 안내 */
 .betfrom .bfnum { min-width: 7.2em; text-align: center; font-size: 15px; }

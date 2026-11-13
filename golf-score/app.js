@@ -8,7 +8,7 @@
   // 앱을 갱신한 직후 신호가 나빠 파일 일부만 새로 받아지면, 이 파일은 새것인데 analysis.js 등은 예전 것일 수 있다(예전 것은 기기에 저장된 사본).
   // 그대로 실행하면 없는 함수를 불러 빈 화면이 되거나 돈 계산이 예전 방식으로 조용히 돌아가므로, 짝이 맞지 않으면 안내만 띄우고 두 번까지 다시 받아 본다.
   // 짝은 버전 번호(BUILD)로 확인한다: games.js · analysis.js · sync.js가 모두 이 파일과 같은 번호여야 한다 (sw.js의 캐시 번호와 함께 올린다)
-  var BUILD = 16;
+  var BUILD = 17;
   window.__gsApp = BUILD; // games.js · analysis.js · sync.js가 '같은 버전의 app.js가 실행됐는지' 확인하는 표시 (그 파일들의 안전장치 설명 참고)
   if (!G || !S || !A || G.BUILD !== BUILD || S.BUILD !== BUILD || A.BUILD !== BUILD) {
     var box = document.getElementById('app'), tries = 0;
@@ -1957,11 +1957,18 @@
     return html;
   }
 
-  /** now: 진행 중인 매치의 지금까지 금액 (매치 탭에서만 넣는다) */
-  function matchBox(m, st, extra, now) {
+  /**
+   * now: 진행 중인 매치의 지금까지 금액 (매치 탭에서만 넣는다)
+   * tally: 두 쪽이 이긴 홀 수를 '이긴 홀 3 : 4'로 적는다 (팀 매치). 왼쪽 수가 왼쪽 팀, 색은 아래 점 표시와 같다.
+   *        승부가 일찍 갈린 매치(3&2 등)는 갈린 홀까지만 센다: 점 표시와 같은 홀들이다. 줄은 0 : 0일 때도 둔다 (상자 높이가 변하지 않게)
+   */
+  function matchBox(m, st, extra, now, tally) {
     var a = st.leader === 'A', b = st.leader === 'B';
+    var wonA = 0, wonB = 0;
+    if (tally) st.holes.forEach(function (v) { if (v === 1) wonA++; else if (v === -1) wonB++; });
     return '<div class="matchbox"><div class="side ' + (a ? 'lead' : '') + '">' + esc(m.a.name) + (a ? ' ▲' : '') + '</div>' +
-      '<div class="st">' + esc(st.text) + '<small>' + (extra || (st.finished ? '종료' : '진행 중')) + '</small>' + (now ? '<small class="now">' + now + '</small>' : '') + '</div>' +
+      '<div class="st">' + esc(st.text) + (tally ? '<small class="tally">이긴 홀 <b class="a">' + wonA + '</b> : <b class="b">' + wonB + '</b></small>' : '') +
+      '<small>' + (extra || (st.finished ? '종료' : '진행 중')) + '</small>' + (now ? '<small class="now">' + now + '</small>' : '') + '</div>' +
       '<div class="side r ' + (b ? 'lead' : '') + '">' + (b ? '▲ ' : '') + esc(m.b.name) + '</div>' +
       '<div class="holedots">' + st.holes.map(function (v) { return '<span class="' + (v === 1 ? 'a' : v === -1 ? 'b' : v === 0 ? 't' : '') + '">·</span>'; }).join('') + '</div></div>';
   }
@@ -1980,7 +1987,7 @@
         var fin = m.status.finished || state.readOnly;
         // 금액 줄의 자리는 동률일 때도 비워 둔다: 동률과 리드가 오갈 때마다 아래 표가 한 줄씩 밀리지 않게
         var now = fin || !res.enabled || !(res.unit > 0) ? null : m.running ? '지금 ' + (mteam ? '각자 ' : '') + won(m.running) : '&nbsp;';
-        return matchBox(m, m.status, fin && m.money && res.enabled ? won(m.money) : null, now);
+        return matchBox(m, m.status, fin && m.money && res.enabled ? won(m.money) : null, now, mteam);
       }).join('') +
       '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. ' +
       '금액은 지금까지의 홀 차 × 단가예요.' + (res.unit && res.enabled ? ' 매치가 진행 중이어도 정산에 들어가고, 끝나면 확정돼요.' : '') + '</div></div>' +

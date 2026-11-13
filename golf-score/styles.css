@@ -258,6 +258,12 @@ tr.me td { font-weight: 700; }
 .matchbox .st { text-align: center; font-weight: 800; font-size: 18px; }
 .matchbox .st small { display: block; font-size: 11px; font-weight: 600; color: var(--muted); }
 .matchbox .st small.now { font-size: 12px; font-weight: 700; color: var(--primary); } /* 진행 중인 매치의 지금까지 금액 */
+.matchbox.none { grid-template-columns: 1fr; } /* 내기 시작 홀 때문에 겨루지 않는 나소의 판 */
+/* 내기 시작 홀: 설정 카드의 직접 고르기(−, N번째 홀부터, ＋)와 리더보드의 안내 */
+.betfrom .bfnum { min-width: 7.2em; text-align: center; font-size: 15px; }
+.betfrom .btn.sm { min-width: 40px; }
+.betfrom .seg { flex: 1 1 100%; } .betfrom .seg button { padding-left: 4px; padding-right: 4px; } /* 세 단추가 좁은 화면(320px)에서도 카드 안에 들어가게 */
+.notice.betnote { background: #eef4ff; color: #1f3f77; }
 .holedots { display: flex; flex-wrap: wrap; gap: 3px; grid-column: 1 / -1; }
 .holedots span { width: 14px; height: 14px; border-radius: 4px; background: #eef2ef; font-size: 0; }
 .holedots span.a { background: var(--team-A); } .holedots span.b { background: var(--team-B); } .holedots span.t { background: #cbd5d0; }

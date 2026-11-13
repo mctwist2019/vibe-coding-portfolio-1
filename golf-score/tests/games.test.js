@@ -1067,3 +1067,137 @@ test('team nassau lists the stroke applied for each team on every hole that coun
   const net = Object.fromEntries(G.settle(G.nassau(all, { unit: 5000, mode: 'team' }).transfers, all.players).rows.map(x => [x.id, x.net]));
   assert.deepEqual(net, { a: 15000, b: 15000, c: -15000, d: -15000 });
 });
+
+// ── 내기 시작 홀 (round.games.stroke.from: N번째로 친 홀부터 내기) ──
+const betNet = (transfers, players) => Object.fromEntries(G.settle(transfers, players).rows.map((x) => [x.id, x.net]));
+// 9홀, 파 4. 1~3번홀은 a가 버디(3타), 4~6번홀은 c가 버디, 나머지는 5타. 7~9번홀은 미입력
+const BET_SCORES = { a: [3, 3, 3, 5, 5, 5], b: [5, 5, 5, 5, 5, 5], c: [5, 5, 5, 3, 3, 3], d: [5, 5, 5, 5, 5, 5] };
+const betRound = (from, extra) => mkRound(TEAM4, JSON.parse(JSON.stringify(BET_SCORES)), Object.assign({ holes: 9, pars: Array(9).fill(4), games: {
+  stroke: { unit: 1000, from }, skins: { enabled: true, unit: 1000, mode: 'individual' }, ojang: { enabled: true, unit: 1000, birdie: false, near: false },
+  match: { enabled: true, unit: 1000, mode: 'team' }, bestball: { enabled: true, unit: 1000, count: 1 }, vegas: { enabled: true, unit: 100 }, bonus: { birdie: true, unit: 1000 }
+} }, extra || {}));
+
+test('betFrom: the hole count from which bets start; anything out of range means from the first hole', () => {
+  const r = (from, holes) => ({ holes: holes || 18, games: { stroke: { from } } });
+  assert.deepEqual([undefined, null, 1, 0, -2, 'x', NaN].map((v) => G.betFrom(r(v))), [1, 1, 1, 1, 1, 1, 1]);
+  assert.deepEqual([2, 4, 10, 18, 4.9, '7'].map((v) => G.betFrom(r(v))), [2, 4, 10, 18, 4, 7]);
+  assert.equal(G.betFrom(r(19)), 1, 'beyond the last hole: from the first hole, bets are never dropped silently');
+  assert.equal(G.betFrom(r(10, 9)), 1, 'a value left from an 18-hole round does not apply to nine holes');
+  assert.equal(G.betFrom(r(9, 9)), 9);
+  assert.equal(G.betFrom({ holes: 18 }), 1);
+  // 빠지는 홀: 친 순서에서 앞의 N − 1개
+  assert.equal(G.betSkip(r(1)), null);
+  assert.deepEqual(G.betSkip(r(4, 9)), [true, true, true, false, false, false, false, false, false]);
+  const back = Array.from({ length: 18 }, (_, i) => (i + 9) % 18);
+  assert.deepEqual(G.betSkip(r(4), back).map((v, h) => (v ? h + 1 : 0)).filter(Boolean), [10, 11, 12]);
+  assert.deepEqual(G.betSkip(r(11), back).map((v, h) => (v ? h + 1 : 0)).filter(Boolean), [1, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+});
+
+test('bets from the 4th hole: every money game leaves out the first three holes, the ranking does not', () => {
+  const r = betRound(4), all = G.computeAll(r);
+  assert.equal(all.betFrom, 4);
+  assert.deepEqual(all.skip, [true, true, true, false, false, false, false, false, false]);
+  // 순위와 스테이블포드에는 모든 홀이 들어간다
+  assert.deepEqual(all.stroke.rows.map((x) => x.id + ' ' + x.gross + ' ' + x.played), ['a 24 6', 'c 24 6', 'b 30 6', 'd 30 6']);
+  assert.deepEqual(all.stableford, G.computeAll(betRound(1)).stableford);
+  // 스트로크 내기: 4~6번홀만 (a 15 · b 15 · c 9 · d 15) → c가 세 사람에게서 6타씩
+  assert.deepEqual(betNet(all.stroke.transfers, r.players), { a: -6000, b: -6000, c: 18000, d: -6000 });
+  // 스킨스: 4~6번홀을 c가 하나씩. 1~3번홀은 내기 전
+  assert.deepEqual(all.skins.entrants.map((e) => e.id + ' ' + e.skins).sort(), ['a 0', 'b 0', 'c 3', 'd 0']);
+  assert.deepEqual(all.skins.holes.map((h) => (h.skipped ? 'x' : h.winner || '-')).join(''), 'xxxccc---');
+  assert.deepEqual(betNet(all.skins.transfers, r.players), { a: -3000, b: -3000, c: 9000, d: -3000 });
+  // 오장: 4~6번홀 배판(버디 · 3명 동타), c가 세 사람에게서 2타 × 1,000 × 2
+  assert.deepEqual(all.ojang.holes.map((h) => (h.skipped ? 'x' : h.played ? h.mult : '-')).join(''), 'xxx222---');
+  assert.deepEqual(betNet(all.ojang.transfers, r.players), { a: -12000, b: -12000, c: 36000, d: -12000 });
+  // 매치(팀): 4~9번홀 여섯 홀짜리 매치. B팀이 세 홀을 이겨 3UP (3홀), 지금까지 3,000원씩
+  const m = all.match.matches[0];
+  assert.deepEqual(m.list, [3, 4, 5, 6, 7, 8]);
+  assert.equal(m.status.text, '3UP (3홀)');
+  assert.deepEqual(m.status.holes, [-1, -1, -1, null, null, null]);
+  assert.deepEqual(m.best.map((x) => (x ? x.a.score + ':' + x.b.score : '-')), ['-', '-', '-', '5:3', '5:3', '5:3', '-', '-', '-']);
+  assert.deepEqual(betNet(all.match.transfers, r.players), { a: -3000, b: -3000, c: 3000, d: 3000 });
+  // 베스트볼: 4~6번홀을 B팀이 이긴다
+  assert.deepEqual(all.bestball.holes.map((h) => (h.skipped ? 'x' : h.winner || '-')).join(''), 'xxxBBB---');
+  assert.deepEqual(all.bestball.teams.map((t) => t.id + ' ' + t.total + ' ' + t.holesWon).sort(), ['A 15 0', 'B 9 3']);
+  assert.deepEqual(betNet(all.bestball.transfers, r.players), { a: -3000, b: -3000, c: 3000, d: 3000 });
+  // 라스베가스: 홀마다 55 대 35 → B팀 20점 × 100원
+  assert.deepEqual(all.vegas.holes.map((h) => (h.skipped ? 'x' : h.played ? h.points : '-')).join(' '), 'x x x 20 20 20 - - -');
+  assert.deepEqual(betNet(all.vegas.transfers, r.players), { a: -6000, b: -6000, c: 6000, d: 6000 });
+  // 보너스(버디): c의 버디 셋만. a의 1~3번홀 버디는 횟수에도 돈에도 없다
+  assert.deepEqual([all.bonus.counts.a.birdie, all.bonus.counts.c.birdie], [0, 3]);
+  assert.deepEqual(betNet(all.bonus.transfers, r.players), { a: -3000, b: -3000, c: 9000, d: -3000 });
+  // 정산: 위 금액의 합
+  assert.deepEqual(Object.fromEntries(all.settlement.rows.map((x) => [x.id, x.net])), { a: -36000, b: -36000, c: 84000, d: -12000 });
+  // 같은 라운드를 처음부터 세면 a와 c가 똑같이 세 홀씩 이겨 스트로크 · 스킨스 · 보너스가 비긴다 (내기 시작 홀이 실제로 결과를 바꾼다는 확인)
+  const from1 = G.computeAll(betRound(1));
+  assert.deepEqual(betNet(from1.stroke.transfers, r.players), { a: 12000, b: -12000, c: 12000, d: -12000 });
+  assert.deepEqual(from1.skins.entrants.map((e) => e.id + ' ' + e.skins).sort(), ['a 3', 'b 0', 'c 3', 'd 0']);
+  assert.equal(from1.match.matches[0].status.text, 'AS (6홀)');
+  assert.equal(from1.skip, null);
+});
+
+test('bets from a later hole: a shorter match is decided and finished on its own holes', () => {
+  // 9홀 가운데 4~9번홀 여섯 홀로 겨룬다. A팀이 4~7번홀을 이기면 4&2로 끝난다
+  const r = mkRound(TEAM4, { a: Array(9).fill(3), b: Array(9).fill(5), c: Array(9).fill(4), d: Array(9).fill(6) }, { holes: 9, games: { stroke: { from: 4 }, match: { enabled: true, unit: 1000, mode: 'team' } } });
+  const m = G.computeAll(r).match.matches[0];
+  assert.equal(m.status.text, '4&2');
+  assert.equal(m.status.finished, true);
+  assert.equal(m.money, 4000);
+  assert.equal(m.running, 0);
+  assert.deepEqual(m.best.map((x) => !!x), [false, false, false, true, true, true, true]);
+  // 마지막 홀까지 가는 매치도 그 홀들을 다 치면 끝난다: 7~9번홀 세 홀을 번갈아 이기고 비긴다
+  const t = mkRound(TEAM4, { a: [4, 4, 4, 4, 4, 4, 3, 5, 4], b: Array(9).fill(6), c: Array(9).fill(4), d: Array(9).fill(6) }, { holes: 9, games: { stroke: { from: 7 }, match: { enabled: true, unit: 1000, mode: 'team' } } });
+  const mt = G.computeAll(t).match.matches[0];
+  assert.deepEqual(mt.status.holes, [1, -1, 0]);
+  assert.equal(mt.status.text, 'AS');
+  assert.equal(mt.status.finished, true);
+});
+
+test('bets from a later hole in nassau: each 판 is played on the holes that are left; a 판 with no hole is not played', () => {
+  const sc = { a: Array(18).fill(3), b: Array(18).fill(6), c: Array(18).fill(4), d: Array(18).fill(6) };
+  const nas = (from) => G.computeAll(mkRound(TEAM4, JSON.parse(JSON.stringify(sc)), { games: { stroke: { from }, nassau: { enabled: true, unit: 5000, mode: 'team' } } })).nassau;
+  // 4번째 홀부터: 전반은 4~9번홀(여섯 홀, 4&2), 후반은 그대로(5&4), 전체는 4~18번홀(열다섯 홀, 8&7)
+  let res = nas(4), m = res.matches[0];
+  assert.deepEqual(m.segments.map((s) => s.list.length + ' ' + s.status.text + ' ' + s.money + ' ' + s.empty), ['6 4&2 5000 false', '9 5&4 5000 false', '15 8&7 5000 false']);
+  // 전반은 7번홀에서, 전체는 11번홀에서, 후반은 14번홀에서 끝난다 → 4~14번홀이 어느 판엔가 들어간다
+  assert.deepEqual(m.best.map((x) => !!x), [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0].map(Boolean));
+  assert.deepEqual(betNet(res.transfers, TEAM4), { a: 15000, b: 15000, c: -15000, d: -15000 });
+  // 후반부터(10번째 홀): 전반은 겨루지 않고, 후반과 전체가 같은 아홉 홀이다
+  res = nas(10); m = res.matches[0];
+  assert.deepEqual(m.segments.map((s) => s.list.length + ' ' + s.status.text + ' ' + s.money + ' ' + s.empty), ['0 AS 0 true', '9 5&4 5000 false', '9 5&4 5000 false']);
+  assert.deepEqual(betNet(res.transfers, TEAM4), { a: 10000, b: 10000, c: -10000, d: -10000 });
+  assert.deepEqual(m.best.map((x) => !!x).indexOf(true), 9);
+  // 처음부터면 전과 같다
+  assert.deepEqual(nas(1).matches[0].segments.map((s) => s.status.text), ['5&4', '5&4', '10&8']);
+});
+
+test('bets from a later hole follow the order of play when the round started on the 10th hole', () => {
+  // 10번홀 출발: 10~12번홀이 처음 세 홀. 13번홀부터 내기
+  const back = Array.from({ length: 18 }, (_, i) => (i + 9) % 18);
+  const sc = { a: Array(18).fill(null), b: Array(18).fill(null) };
+  [9, 10, 11, 12, 13].forEach((h) => { sc.a[h] = 3; sc.b[h] = 5; });
+  const r = mkRound([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], sc, { pars: Array(18).fill(4), games: { stroke: { unit: 1000, from: 4 }, skins: { enabled: true, unit: 1000, mode: 'individual', playorder: true }, ojang: { enabled: true, unit: 1000, birdie: false, near: false } } });
+  const all = G.computeAll(r, { order: back });
+  assert.deepEqual(all.skip.map((v, h) => (v ? h + 1 : 0)).filter(Boolean), [10, 11, 12]);
+  assert.deepEqual(all.skins.entrants.map((e) => e.id + ' ' + e.skins), ['a 2', 'b 0']);
+  assert.deepEqual([9, 10, 11, 12, 13].map((h) => (all.skins.holes[h].skipped ? 'x' : all.skins.holes[h].winner)).join(''), 'xxxaa');
+  assert.deepEqual(betNet(all.stroke.transfers, r.players), { a: 4000, b: -4000 });
+  assert.equal(all.ojang.holes[9].skipped, true);
+  assert.equal(all.ojang.holes[12].played, true);
+  // 같은 설정을 홀 번호 순으로 보면(1번홀 출발) 1~3번홀이 빠지고 10~14번홀이 모두 들어간다
+  const nat = G.computeAll(r);
+  assert.deepEqual(nat.skip.map((v, h) => (v ? h + 1 : 0)).filter(Boolean), [1, 2, 3]);
+  assert.deepEqual(betNet(nat.stroke.transfers, r.players), { a: 10000, b: -10000 });
+});
+
+test('bets from a later hole: skins carry and the 오장 double after an all-square hole start afresh', () => {
+  // 3번홀(내기 전)이 전원 동타여도 4번홀로 이월되거나 4번홀이 배판이 되지 않는다. 4번홀 동타는 5번홀로 이월된다
+  const r = mkRound([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], { a: [4, 4, 4, 4, 4, 5], b: [4, 4, 4, 4, 5, 4] }, { holes: 9, pars: Array(9).fill(4), games: { stroke: { from: 4 }, skins: { enabled: true, unit: 1000, mode: 'individual' }, ojang: { enabled: true, unit: 1000, birdie: false, near: false, carry: true } } });
+  const all = G.computeAll(r);
+  assert.deepEqual(all.skins.holes.slice(0, 6).map((h) => (h.skipped ? 'x' : h.winner ? h.winner + h.skins : 't')).join(' '), 'x x x t a2 b1');
+  assert.deepEqual(all.ojang.holes.slice(0, 6).map((h) => (h.skipped ? 'x' : h.mult)).join(' '), 'x x x 1 2 1', 'hole 4 is not doubled by the all-square hole 3; hole 5 is doubled by hole 4');
+  // 처음부터 세면 1~4번홀의 이월이 5번홀로 가고 2번홀부터 배판이다
+  const from1 = G.computeAll(Object.assign({}, r, { games: Object.assign({}, r.games, { stroke: { from: 1 } }) }));
+  assert.deepEqual(from1.skins.holes.slice(0, 6).map((h) => (h.winner ? h.winner + h.skins : 't')).join(' '), 't t t t a5 b1');
+  assert.deepEqual(from1.ojang.holes.slice(0, 6).map((h) => h.mult).join(' '), '1 2 2 2 2 1');
+});

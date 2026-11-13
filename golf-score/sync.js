@@ -50,7 +50,8 @@
   // 홀마다 적는 사람: 니어리스트 · 롱기스트 · 지우개(파3에서 니어를 지운 사람). 값은 플레이어 id
   var EXTRA_FIELDS = ['nearest', 'longest', 'eraser'];
   var GAME_SCHEMA = {
-    stroke: { enabled: 'bool', net: 'bool', unit: 'money', cap: 'bool' },
+    // from: 내기 시작 홀 (N번째로 친 홀부터 내기. 1 = 처음부터). 스트로크만이 아니라 돈이 걸린 모든 게임에 적용된다 (cap처럼 라운드 전체의 규칙)
+    stroke: { enabled: 'bool', net: 'bool', unit: 'money', cap: 'bool', from: 'from' },
     stableford: { enabled: 'bool', net: 'bool' },
     skins: { enabled: 'bool', net: 'bool', mode: 'mode', unit: 'money', fund: 'bool', stake: 'money', prize: 'money', start: 'money', tip: 'money', caddie: 'money', collect: 'bool', oecd: 'bool', fine: 'money', join: 'money', playorder: 'bool' },
     ojang: { enabled: 'bool', net: 'bool', unit: 'money', carry: 'bool', birdie: 'bool', near: 'bool' },
@@ -158,6 +159,7 @@
       case 'mode': return v === 'individual' || v === 'team' ? v : undefined;
       case 'count': return v === 1 || v === 2 ? v : undefined;
       case 'build': { var bv = clampInt(v, 0, 9999); return bv === null ? undefined : bv; }
+      case 'from': { var fv = clampInt(v, 1, 18); return fv === null ? undefined : fv; }
     }
     return undefined;
   }

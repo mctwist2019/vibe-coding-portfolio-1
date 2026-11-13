@@ -218,13 +218,13 @@
       r.rank = rank;
     });
 
-    // 스트로크 내기: 모두 완료한 홀을 기준으로 타수 차 × 단가 (쌍별)
+    // 스트로크 내기: 모두 완료한 홀을 기준으로 타수 차 × 단가 (쌍별). opt.skip: 내기를 시작하기 전의 홀은 뺀다 (순위에는 모든 홀이 들어간다)
     var transfers = [];
     var unit = Number(opt.unit) || 0;
     if (unit > 0 && rows.length >= 2) {
       var allPids = round.players.map(function (p) { return p.id; });
       var common = [];
-      for (var h = 0; h < round.holes; h++) if (holeCompleteFor(round, allPids, h)) common.push(h);
+      for (var h = 0; h < round.holes; h++) if (!(opt.skip && opt.skip[h]) && holeCompleteFor(round, allPids, h)) common.push(h);
       var totals = {};
       rows.forEach(function (r) {
         var t = 0;
@@ -361,6 +361,8 @@
 
     for (var oi = 0; oi < order.length; oi++) {
       var h = order[oi];
+      // 내기를 시작하기 전의 홀(opt.skip): 스킨도 이월도 벌금도 없다. 이월은 그대로 넘어간다
+      if (opt.skip && opt.skip[h]) { res.holes[h] = { hole: h, winner: null, skins: 0, carry: carry, played: false, skipped: true }; continue; }
       var scores = ents.map(function (e) { return entrantScore(round, e, h, useNet, sm); });
       if (scores.some(function (s) { return s === null; })) {
         res.holes[h] = { hole: h, winner: null, skins: 0, carry: carry, played: false };
@@ -475,6 +477,8 @@
     var prevAllTied = false, order = holeOrder(round, opt.order);
     for (var oi = 0; oi < order.length; oi++) {
       var h = order[oi];
+      // 내기를 시작하기 전의 홀(opt.skip): 주고받지 않고, 전원 동타였어도 다음 홀이 배판이 되지 않는다
+      if (opt.skip && opt.skip[h]) { res.holes[h] = { hole: h, played: false, mult: 1, reasons: [], skipped: true }; prevAllTied = false; continue; }
       if (!holeCompleteFor(round, pids, h)) {
         // 아직 다 입력하지 않은 홀: 앞 홀이 전원 동타였다면 이 홀이 배판이 될 차례다 (pendingDouble). nextDouble은 그런 홀 가운데 가장 먼저 칠 홀
         var pend = carryOn && prevAllTied;
@@ -563,6 +567,24 @@
     for (var h = from; h < to; h++) arr.push(entrantScore(round, e, h, useNet, sm, count));
     return arr;
   }
+  /** from 이상 to 미만의 홀 가운데 내기에 들어가는 홀(skip에 없는 홀)의 번호들. 매치 · 나소는 이 홀들만으로 한 판을 겨룬다 */
+  function holesIn(from, to, skip) {
+    var list = [];
+    for (var h = from; h < to; h++) if (!(skip && skip[h])) list.push(h);
+    return list;
+  }
+  function seriesOf(round, e, useNet, sm, list) {
+    return list.map(function (h) { return entrantScore(round, e, h, useNet, sm, 1); });
+  }
+  /** 팀 매치 · 팀 나소의 홀별 베스트: 홀 번호로 찾는 배열(들어가지 않는 홀은 null)에 그 판의 홀들을 채운다 */
+  function fillBest(best, round, A, B, useNet, sm, st, list) {
+    st.holes.forEach(function (v, i) {
+      var h = list[i];
+      while (best.length <= h) best.push(null);
+      if (v !== null) best[h] = { a: teamHoleBest(round, A.pids, h, useNet, sm), b: teamHoleBest(round, B.pids, h, useNet, sm) };
+    });
+    return best;
+  }
 
   function pairings(round, mode) {
     var ents = entrantsFor(round, mode);
@@ -587,10 +609,12 @@
     var sm = strokesMap(round);
     pr.pairs.forEach(function (pair) {
       var A = pair[0], B = pair[1];
-      var st = computeMatch(seriesFor(round, A, useNet, sm, 1, 0, round.holes), seriesFor(round, B, useNet, sm, 1, 0, round.holes));
-      var m = { a: { id: A.id, name: A.name, pids: A.pids }, b: { id: B.id, name: B.name, pids: B.pids }, status: st, money: 0, running: 0 };
-      // 팀 매치: 매치에 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (승부가 난 뒤의 홀은 status.holes처럼 넣지 않는다)
-      if (A.isTeam) m.best = st.holes.map(function (v, h) { return v === null ? null : { a: teamHoleBest(round, A.pids, h, useNet, sm), b: teamHoleBest(round, B.pids, h, useNet, sm) }; });
+      // 내기를 시작하기 전의 홀(opt.skip)은 매치에 들어가지 않는다: 남은 홀들만으로 겨룬다 (list: 매치에 들어가는 홀 번호, status.holes와 같은 순서)
+      var list = holesIn(0, round.holes, opt.skip);
+      var st = computeMatch(seriesOf(round, A, useNet, sm, list), seriesOf(round, B, useNet, sm, list));
+      var m = { a: { id: A.id, name: A.name, pids: A.pids }, b: { id: B.id, name: B.name, pids: B.pids }, status: st, money: 0, running: 0, list: list };
+      // 팀 매치: 매치에 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (승부가 난 뒤의 홀은 status.holes처럼 넣지 않는다). 홀 번호로 찾는다
+      if (A.isTeam) m.best = fillBest([], round, A, B, useNet, sm, st, list);
       // 금액은 지금까지의 홀 차 × 단가. 매치가 진행 중이어도 정산에 들어가고(그동안 running에 같은 금액), 끝나면 그 금액으로 확정된다.
       // 그래서 매치가 끝나기 전에 라운드를 마치면 그때의 홀 차로 정산된다 (빌드 15까지는 매치가 끝나야만 들어갔다)
       if (st.up !== 0 && unit > 0) {
@@ -618,9 +642,13 @@
     pr.pairs.forEach(function (pair) {
       var A = pair[0], B = pair[1];
       var m = { a: { id: A.id, name: A.name, pids: A.pids }, b: { id: B.id, name: B.name, pids: B.pids }, segments: [] };
+      var best = [];
       segs.forEach(function (sg) {
-        var st = computeMatch(seriesFor(round, A, useNet, sm, 1, sg.from, sg.to), seriesFor(round, B, useNet, sm, 1, sg.from, sg.to));
-        var seg = { key: sg.key, name: sg.name, status: st, money: 0 };
+        // 내기를 시작하기 전의 홀(opt.skip)은 판에 들어가지 않는다. 한 홀도 남지 않은 판(empty)은 겨루지 않는다
+        var list = holesIn(sg.from, sg.to, opt.skip);
+        var st = computeMatch(seriesOf(round, A, useNet, sm, list), seriesOf(round, B, useNet, sm, list));
+        var seg = { key: sg.key, name: sg.name, status: st, money: 0, list: list, empty: list.length === 0 };
+        if (A.isTeam) fillBest(best, round, A, B, useNet, sm, st, list);
         if (st.finished && st.up !== 0 && unit > 0) {
           var win = st.up > 0 ? A : B, lose = st.up > 0 ? B : A;
           seg.money = unit;
@@ -628,14 +656,8 @@
         }
         m.segments.push(seg);
       });
-      // 팀 나소: 세 판 중 하나에라도 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (매치 플레이의 best와 같은 모양)
-      if (A.isTeam) {
-        m.best = [];
-        for (var h = 0; h < round.holes; h++) {
-          var counted = m.segments.some(function (sg2, k) { var i = h - segs[k].from; return i >= 0 && i < sg2.status.holes.length && sg2.status.holes[i] !== null; });
-          m.best.push(counted ? { a: teamHoleBest(round, A.pids, h, useNet, sm), b: teamHoleBest(round, B.pids, h, useNet, sm) } : null);
-        }
-      }
+      // 팀 나소: 세 판 중 하나에라도 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (매치 플레이의 best와 같은 모양: 홀 번호로 찾고, 18칸)
+      if (A.isTeam) { while (best.length < round.holes) best.push(null); m.best = best; }
       res.matches.push(m);
     });
     return res;
@@ -656,6 +678,8 @@
     var allPids = [];
     teams.forEach(function (t) { allPids = allPids.concat(t.pids); });
     for (var h = 0; h < round.holes; h++) {
+      // 내기를 시작하기 전의 홀(opt.skip): 팀 점수에도 홀 승에도 넣지 않는다
+      if (opt.skip && opt.skip[h]) { res.holes.push({ hole: h, scores: teams.map(function () { return null; }), winner: null, played: false, skipped: true }); continue; }
       var scores = teams.map(function (t) { return teamHoleScore(round, t.pids, h, useNet, count, sm); });
       var hole = { hole: h, scores: scores, winner: null, played: false };
       if (scores.every(function (s) { return s !== null; })) {
@@ -699,6 +723,8 @@
     var pts = {};
     teams.forEach(function (t) { pts[t.id] = 0; });
     for (var h = 0; h < round.holes; h++) {
+      // 내기를 시작하기 전의 홀(opt.skip)은 겨루지 않는다
+      if (opt.skip && opt.skip[h]) { res.holes.push({ hole: h, played: false, nums: [null, null], points: 0, winner: null, flips: [false, false], skipped: true }); continue; }
       var allIn = teams.every(function (t) { return holeCompleteFor(round, t.pids, h); });
       var hole = { hole: h, played: allIn, nums: [null, null], points: 0, winner: null, flips: [false, false] };
       if (allIn) {
@@ -774,6 +800,7 @@
       res.transfers = res.transfers.concat(makeTransfers([to], pids.filter(function (p) { return p !== to; }), amount, 'bonus', note));
     }
     for (var h = 0; h < round.holes; h++) {
+      if (opt.skip && opt.skip[h]) continue; // 내기를 시작하기 전의 홀: 횟수에도 돈에도 넣지 않는다
       var ni = nearInfo(round, h, res.rules), lg = longOf(round, h, res.rules);
       if (ni.pid) {
         res.counts[ni.pid].nearest++;
@@ -864,6 +891,21 @@
     return out;
   }
 
+  /** 내기 시작 홀: N번째로 친 홀부터 내기를 한다는 N (1 = 처음부터). 없거나 홀 수를 벗어난 값은 1로 본다 (내기가 말없이 빠지지 않게) */
+  function betFrom(round) {
+    var v = Math.floor(Number(round.games && round.games.stroke && round.games.stroke.from));
+    return v >= 2 && v <= round.holes ? v : 1;
+  }
+  /** 내기를 시작하기 전에 친 홀들: skip[홀 번호] = true (친 순서 order에서 앞의 betFrom − 1개). 처음부터면 null */
+  function betSkip(round, order) {
+    var from = betFrom(round);
+    if (from <= 1) return null;
+    var po = holeOrder(round, order), skip = [];
+    for (var h = 0; h < round.holes; h++) skip.push(false);
+    for (var k = 0; k < from - 1; k++) skip[po[k]] = true;
+    return skip;
+  }
+
   /**
    * 모든 게임을 항상 계산한다 (개인 스코어 하나로 모든 버전의 결과가 나오도록).
    * 각 게임의 enabled(정산 포함) 여부는 결과에 표시되며, 정산(transfers)에는 포함된 게임만 반영된다.
@@ -872,27 +914,31 @@
     var g = round.games || {};
     var order = ctx && ctx.order; // 홀을 친 순서 (앱이 analysis.js의 playOrder로 넘겨 준다)
     function withOrder(o) { var c = {}; Object.keys(o || {}).forEach(function (k) { c[k] = o[k]; }); c.order = order; return c; }
-    var out = { transfers: [] }, fixed = null;
+    // 내기 시작 홀(round.games.stroke.from, N번째로 친 홀부터): 그 앞에 친 홀들(skip)은 돈이 걸린 모든 게임에서 뺀다.
+    // 순위(종합) · 스테이블포드 · 기록에는 그대로 들어간다. 처음부터(1)면 skip이 없어 예전과 똑같이 계산한다
+    var from = betFrom(round), skip = betSkip(round, order);
+    function bet(o) { if (!skip) return o || {}; var c = {}; Object.keys(o || {}).forEach(function (k) { c[k] = o[k]; }); c.skip = skip; return c; }
+    var out = { transfers: [], betFrom: from, skip: skip }, fixed = null;
     function add(key, res, included) {
       res.enabled = !!included;
       out[key] = res;
       if (included && res.transfers && !res.error) out.transfers = out.transfers.concat(res.transfers);
       if (included && res.payout && !res.error) fixed = { game: key, payments: res.payout };
     }
-    add('stroke', strokePlay(round, g.stroke || {}), true);
+    add('stroke', strokePlay(round, bet(g.stroke)), true);
     out.stableford = stableford(round, g.stableford || {});
     // 스킨스는 playorder 표시가 있는 라운드만 친 순서를 따른다. 이 표시가 없는 라운드(업데이트 전에 만든 기록)는 예전처럼 홀 번호 순이라
     // 이미 정산한 금액이 바뀌지 않는다. 오장은 새로 생긴 게임이라 언제나 친 순서다
-    add('skins', skins(round, g.skins && g.skins.playorder ? withOrder(g.skins) : (g.skins || {})), g.skins && g.skins.enabled);
+    add('skins', skins(round, bet(g.skins && g.skins.playorder ? withOrder(g.skins) : g.skins)), g.skins && g.skins.enabled);
     var oj = withOrder(g.ojang);
     oj.eraser = !!(g.bonus && g.bonus.eraser); // 지우개로 지워진 니어는 오장에서도 없던 것으로 한다
-    add('ojang', ojang(round, oj), g.ojang && g.ojang.enabled);
-    add('match', matchPlay(round, g.match || {}), g.match && g.match.enabled);
-    if (round.holes === 18) add('nassau', nassau(round, g.nassau || {}), g.nassau && g.nassau.enabled);
-    add('bestball', bestBall(round, g.bestball || {}), g.bestball && g.bestball.enabled);
-    add('vegas', vegas(round, g.vegas || {}), g.vegas && g.vegas.enabled);
+    add('ojang', ojang(round, bet(oj)), g.ojang && g.ojang.enabled);
+    add('match', matchPlay(round, bet(g.match)), g.match && g.match.enabled);
+    if (round.holes === 18) add('nassau', nassau(round, bet(g.nassau)), g.nassau && g.nassau.enabled);
+    add('bestball', bestBall(round, bet(g.bestball)), g.bestball && g.bestball.enabled);
+    add('vegas', vegas(round, bet(g.vegas)), g.vegas && g.vegas.enabled);
     var b = g.bonus || {};
-    var bonus = bonuses(round, b);
+    var bonus = bonuses(round, bet(b));
     out.bonus = bonus;
     if (b.nearest || b.longest || b.birdie) out.transfers = out.transfers.concat(bonus.transfers);
     out.settlement = settle(out.transfers, round.players, fixed);
@@ -923,6 +969,8 @@
     skins: skins,
     ojang: ojang,
     matchPlay: matchPlay,
+    betFrom: betFrom,
+    betSkip: betSkip,
     teamHoleBest: teamHoleBest,
     nassau: nassau,
     bestBall: bestBall,

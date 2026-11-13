@@ -539,3 +539,36 @@ test('nearest/longest rules and the eraser are shared: bonus settings and the pe
   assert.equal(r.extras[2], undefined);
 });
 
+test('the hole from which bets start is shared like any game setting (gm:stroke:from, 1 to 18)', () => {
+  const host = mkRound(), clock = S.createClock(() => 5000);
+  assert.equal(S.GAME_SCHEMA.stroke.from, 'from');
+  // 정하지 않은 라운드는 키를 보내지 않는다 (예전 버전이 만든 라운드와 같은 모양)
+  assert.equal('gm:stroke:from' in S.exportKeys(host), false);
+  let base = S.project(host);
+  host.games.stroke.from = 4;
+  const d = S.diffAndStamp(host, base, clock, 'host1');
+  assert.deepEqual(d.changed, ['gm:stroke:from']);
+  const keys = S.exportKeys(host);
+  assert.equal(keys['gm:stroke:from'].v, 4);
+  // 참여한 기기가 받는다
+  const guest = S.roundFromSnapshot(keys, defaults);
+  assert.equal(guest.games.stroke.from, 4);
+  assert.equal(G.betFrom(guest), 4);
+  // 범위를 벗어난 값은 1~18로 맞추고, 숫자가 아니면 받지 않는다
+  assert.equal(S.setKey(guest, 'gm:stroke:from', 0), true);
+  assert.equal(guest.games.stroke.from, 1);
+  assert.equal(S.setKey(guest, 'gm:stroke:from', 99), true);
+  assert.equal(guest.games.stroke.from, 18);
+  assert.equal(G.betFrom(guest), 1, '18 on a 9-hole round is out of range for the calculation: bets from the first hole');
+  assert.equal(S.setKey(guest, 'gm:stroke:from', 'abc'), false);
+  assert.equal(guest.games.stroke.from, 18);
+  assert.equal(S.setKey(guest, 'gm:stroke:from', 3.6), true);
+  assert.equal(guest.games.stroke.from, 4);
+  // 나중에 고친 쪽이 이긴다
+  base = S.project(host);
+  host.games.stroke.from = 10;
+  S.diffAndStamp(host, base, S.createClock(() => 9000), 'host1');
+  S.merge(guest, S.exportKeys(host));
+  assert.equal(guest.games.stroke.from, 10);
+});
+

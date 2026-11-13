@@ -146,7 +146,8 @@
   // ───────────────────────── 기본값 ─────────────────────────
   function defaultGames() {
     return {
-      stroke: { enabled: true, net: false, unit: 0, cap: false },
+      // from(내기 시작 홀: N번째로 친 홀부터 내기)은 1(처음부터): 이 설정이 생기기 전에 만든 라운드의 돈이 바뀌지 않는다
+      stroke: { enabled: true, net: false, unit: 0, cap: false, from: 1 },
       stableford: { enabled: true, net: true },
       // fund(공금 방식)는 여기서는 꺼 둔다: 이 값은 예전에 만든 라운드에 빠진 설정을 채우는 데도 쓰이므로, 그 라운드들의 돈 계산이 바뀌면 안 된다.
       // 새 라운드는 newDraft에서 공금 방식을 켠 채로 시작한다.
@@ -1328,6 +1329,24 @@
     return html;
   }
 
+  /** 홀 번호 목록(0부터)을 '1~3번홀', '10~18, 1~2번홀'처럼 적는다 (이어지는 번호는 묶는다) */
+  function holeRanges(list) {
+    var out = [], i = 0;
+    while (i < list.length) {
+      var j = i;
+      while (j + 1 < list.length && list[j + 1] === list[j] + 1) j++;
+      out.push(i === j ? String(list[i] + 1) : (list[i] + 1) + '~' + (list[j] + 1));
+      i = j + 1;
+    }
+    return out.join(', ') + '번홀';
+  }
+  /** 내기를 시작하기 전에 친 홀들의 번호(0부터, 친 순서). 처음부터면 빈 목록 */
+  function betBefore(all, r) {
+    var out = [];
+    if (all.skip) A.playOrder(r).order.forEach(function (h) { if (all.skip[h]) out.push(h); });
+    return out;
+  }
+
   function gameCard(title, desc, enabledPath, enabled, body, noMoney) {
     return '<div class="card">' +
       (noMoney ? '<h2>' + title + '</h2>' : toggle(enabledPath, enabled, title + ' <span class="muted small" style="font-weight:500">정산 포함</span>')) +
@@ -1339,6 +1358,17 @@
     fillGames(g); // 어떤 경로로 왔든 빠진 게임 설정이 없게 한다
     var P = prefix + '.games.';
     var html = '<div class="notice">모든 게임은 입력한 개인 스코어로 <b>항상 자동 계산</b>돼요. 토글은 그 게임의 금액을 정산에 넣을지만 정합니다.</div>';
+    // 내기 시작 홀: N번째로 치는 홀부터 돈이 걸린 게임을 센다 (몸이 풀린 뒤부터 내기를 하는 경우). 값은 stroke.from에 둔다 (양파 한도처럼 라운드 전체의 규칙).
+    // 진행 중인 라운드에서는 친 순서(10번홀 출발이면 10번홀이 첫 번째)를 따라 빠지는 홀을 적는다
+    var bf = Math.floor(Number(g.stroke.from)); bf = bf >= 2 && bf <= holes ? bf : 1;
+    var ord = prefix === 'round' && state.round ? A.playOrder(state.round).order : null, before = [];
+    for (var bk = 0; bk < bf - 1; bk++) before.push(ord ? ord[bk] : bk);
+    var presets = [[1, '처음부터'], [4, '4번째 홀부터']]; if (holes === 18) presets.push([10, '후반부터']);
+    var stepBtn = function (v, label, off) { return '<button type="button" class="btn sm" data-action="set" data-path="' + P + 'stroke.from" data-value="' + v + '" data-type="number" ' + (off ? 'disabled' : '') + '>' + label + '</button>'; };
+    html += '<div class="card betfrom"><h2>내기 시작 홀</h2><div class="desc" style="margin-left:0">몸이 풀린 뒤부터 내기를 하려면 고르세요. 그 앞에 친 홀은 순위와 기록에만 들어가고, 스킨스 · 오장 · 매치처럼 돈이 걸린 게임에서는 모두 빠져요.</div>' +
+      '<div class="opts">' + seg(P + 'stroke.from', bf, presets, 'wide') +
+      '<span class="optbreak"></span><span class="lab">직접</span>' + stepBtn(bf - 1, '−', bf <= 1) + '<b class="bfnum">' + bf + '번째 홀부터</b>' + stepBtn(bf + 1, '＋', bf >= holes) +
+      '<span class="optnote">' + (bf > 1 ? '<b>' + bf + '번째로 치는 홀(' + ((ord ? ord[bf - 1] : bf - 1) + 1) + '번홀)부터</b> 내기를 해요. 그 앞의 ' + (bf - 1) + '홀(' + holeRanges(before) + ')은 내기에서 빠져요.' : '처음부터 모든 홀에 내기를 해요.') + '</span></div></div>';
     html += '<div class="card"><h2>스트로크 플레이</h2><div class="desc" style="margin-left:0">총 타수 순위. 금액을 넣으면 타수 차 × 단가로 1:1 정산</div>' +
       '<div class="opts"><span class="lab">타당</span>' + numField(P + 'stroke.unit', g.stroke.unit, '원 (0이면 순위만)') +
       toggle(P + 'stroke.net', g.stroke.net, '네트(핸디 적용) 기준') +
@@ -1596,6 +1626,8 @@
 
   function liveSummary(r) {
     var all = computeAll(r), parts = [];
+    // 내기 시작 홀을 정한 라운드: 지금 홀이 내기 전이면 알린다 (아래 스킨스 · 오장 · 매치 줄은 내기를 시작한 홀부터 센 값이다)
+    if (all.skip && all.skip[r.currentHole]) parts.push('<div class="kv"><span class="k">내기</span><span><b>이 홀은 내기 전</b> <span class="muted">(' + all.betFrom + '번째 홀부터 내기)</span></span></div>');
     var top = all.stroke.rows.filter(function (p) { return p.played; }).slice(0, 3);
     if (top.length) parts.push('<div class="kv"><span class="k">순위</span><span>' + top.map(function (p) { return (p.rank || '-') + '위 ' + esc(p.name) + ' <span class="' + tpClass(p.toPar) + '">' + G.fmtToPar(p.toPar) + '</span>'; }).join(' · ') + '</span></div>');
     if (all.skins && !all.skins.error) {
@@ -1646,6 +1678,11 @@
       stroke: tabStroke, stableford: tabStableford, skins: tabSkins, ojang: tabOjang, match: tabMatch, nassau: tabNassau,
       bestball: tabBestball, vegas: tabVegas, bonus: tabBonus, settle: tabSettle
     })[tab](r, all);
+    // 내기 시작 홀을 정한 라운드: 돈이 걸리는 탭마다 어느 홀부터인지 알린다 (종합은 타당 금액이 있을 때만. 스테이블포드는 돈이 없다)
+    if (all.betFrom > 1 && tab !== 'stableford' && !(tab === 'stroke' && !(r.games.stroke.unit > 0))) {
+      var bb = betBefore(all, r), first = A.playOrder(r).order[all.betFrom - 1];
+      html += '<div class="notice betnote">내기는 <b>' + all.betFrom + '번째 홀(' + (first + 1) + '번홀)부터</b>예요. 그 앞의 ' + bb.length + '홀(' + holeRanges(bb) + ')은 순위와 기록에만 들어가요.</div>';
+    }
     // 꺼 둔 게임: 계산은 그대로 보여 주되(참고용) 맨 위에 꺼져 있다고 알리고 내용은 흐리게 둔다
     html += gameOff(all, tab) ? offNotice(tab) + '<div class="gameoff">' + body + '</div>' : body;
     html += '</div>' + bottomNav('board');
@@ -1781,7 +1818,7 @@
     if (f) html += fundCard(r, res, done, over, all.settlement.payments.some(function (p) { return !p.fixed; }));
     html += '<div class="card"><h2>홀별 결과</h2><div class="skinlist">' + res.holes.map(function (h) {
       var cls = h.winner ? 'won' : (h.played && h.tie) ? 'carry' : '';
-      return '<div class="' + cls + '">' + (h.hole + 1) + '홀<b>' + (h.winner ? esc(h.winnerName) + ' ' + h.skins : h.played ? '이월' : '-') + '</b>' +
+      return '<div class="' + cls + '">' + (h.hole + 1) + '홀<b>' + (h.winner ? esc(h.winnerName) + ' ' + h.skins : h.played ? '이월' : h.skipped ? '내기 전' : '-') + '</b>' +
         // 벌금은 낸 사람 이름과 함께 (승자 이름 아래에 '벌금'만 쓰면 승자가 낸 것처럼 읽힌다)
         (h.oecd ? '<span class="pen">벌금' + h.oecd.map(function (o) { return '<br>' + esc(o.name); }).join('') + '</span>' : '') + '</div>';
     }).join('') + '</div>' + (r.games.skins.playorder ? startNote(r, '이월' + (f && f.oecd ? '과 OECD 가입' : '') + '은') : '') + '</div>';
@@ -1899,7 +1936,7 @@
       })() +
       '<div class="muted small" style="margin-top:8px">전원이 타수를 넣은 홀만 계산합니다.</div></div>';
     html += '<div class="card"><h2>홀별 판 <span class="hint">배판 ' + res.doubles + '홀</span></h2><div class="skinlist">' + res.holes.map(function (h) {
-      return '<div class="' + (h.played ? (h.mult === 2 ? 'carry' : 'won') : '') + '">' + (h.hole + 1) + '홀<b>' + (h.played ? (h.mult === 2 ? '배판' : '민판') : '-') + '</b></div>';
+      return '<div class="' + (h.played ? (h.mult === 2 ? 'carry' : 'won') : '') + '">' + (h.hole + 1) + '홀<b>' + (h.played ? (h.mult === 2 ? '배판' : '민판') : h.skipped ? '내기 전' : '-') + '</b></div>';
     }).join('') + '</div>' + (r.games.ojang && r.games.ojang.carry === false ? '' : startNote(r, '"앞 홀 전원 동타" 배판은')) + '</div>';
     var notes = [];
     res.holes.forEach(function (h) {
@@ -1970,7 +2007,11 @@
     if (res.error) return '<div class="card">' + head + rule + '</div>' + teamHint(res.error + '.');
     return '<div class="card">' + head + rule + '</div>' + res.matches.map(function (m) {
       return '<div class="card"><h2>' + esc(m.a.name) + ' vs ' + esc(m.b.name) + '</h2><div class="stack">' +
-        m.segments.map(function (s) { return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div>' + matchBox(m, s.status, s.money && res.enabled ? won(s.money) : null); }).join('') + '</div></div>' +
+        m.segments.map(function (s) {
+          // 내기 시작 홀 때문에 한 홀도 남지 않은 판은 겨루지 않는다
+          if (s.empty) return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div><div class="matchbox none"><div class="st"><small>내기 시작 전이라 이 판은 겨루지 않아요</small></div></div>';
+          return '<div class="small muted" style="margin-bottom:-4px">' + esc(s.name) + '</div>' + matchBox(m, s.status, s.money && res.enabled ? won(s.money) : null);
+        }).join('') + '</div></div>' +
         (nteam ? matchBestCard(r, m, res.net) : '');
     }).join('');
   }
@@ -2373,6 +2414,8 @@
     var all = computeAll(r);
     var lines = ['⛳ ' + r.name + ' (' + r.date + ')', ''];
     all.stroke.rows.forEach(function (p) { if (p.played) lines.push((p.rank || '-') + '위 ' + p.name + ': ' + p.gross + '타 (' + G.fmtToPar(p.toPar) + ')' + (p.hcp ? ' / 네트 ' + p.net : '')); });
+    // 내기 시작 홀을 정한 라운드: 아래 게임과 정산이 어느 홀부터 센 것인지 적는다
+    if (all.betFrom > 1) lines.push('', '※ 내기는 ' + all.betFrom + '번째 홀(' + (A.playOrder(r).order[all.betFrom - 1] + 1) + '번홀)부터: 그 앞의 ' + holeRanges(betBefore(all, r)) + '은 순위에만 들어가요');
     if (all.skins && !all.skins.error) lines.push('', '🎯 스킨스: ' + all.skins.entrants.map(function (e) { return e.name + ' ' + e.skins + (e.oecd && all.skins.enabled ? '(OECD)' : ''); }).join(', ') +
       (r.holes === 18 && r.games.skins.playorder && A.playOrder(r).startBack ? ' (10번홀 출발 순서)' : ''));
     if (all.skins && all.skins.enabled && all.skins.fund) {
@@ -2817,6 +2860,8 @@
       if (d.path === 'boardNet') v = d.value === 'true';
       setPath(state, d.path, v);
       if (d.path === 'draft.holes' && v !== 18 && state.draft && state.draft.games && state.draft.games.nassau) state.draft.games.nassau.enabled = false; // 나소 카드가 숨겨지므로 플래그도 해제
+      // 홀 수를 줄였는데 내기 시작 홀이 그보다 뒤이면 처음부터로 되돌린다 (18홀의 '후반부터'가 9홀 라운드에 남지 않게)
+      if (d.path === 'draft.holes' && state.draft && state.draft.games && state.draft.games.stroke && state.draft.games.stroke.from > v) state.draft.games.stroke.from = 1;
       save(); render();
     },
     'toggle-money': function (d) {

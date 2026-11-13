@@ -535,8 +535,13 @@
   }
 
   // ───────────────────────── 매치 플레이 ─────────────────────────
-  /** a,b: 홀별 점수 배열(null 허용). 반환: 상태 */
-  function computeMatch(a, b) {
+  /**
+   * a,b: 홀별 점수 배열(null 허용). 반환: 상태.
+   * 매치는 앞선 홀 수가 남은 홀 수보다 많아지면 끝난다. unplayed가 참이면 '남은 홀'을 아직 겨루지 않은 홀 수로 센다
+   * (배열이 친 순서일 때: 10번홀 출발이나 건너뛴 홀이 있어도 남은 홀을 정확히 센다). 아니면 예전처럼 그 홀 뒤에 놓인 홀 수로 센다
+   * (홀 번호 순 배열: 빌드 15까지 만든 라운드. 그 라운드들의 결과가 바뀌지 않게 그대로 둔다)
+   */
+  function computeMatch(a, b, unplayed) {
     var n = a.length;
     var up = 0, through = 0, decided = false, decidedAt = -1, remaining = n;
     var holeResults = [];
@@ -546,7 +551,7 @@
       else if (a[h] > b[h]) up--;
       holeResults.push(a[h] < b[h] ? 1 : a[h] > b[h] ? -1 : 0);
       through++;
-      remaining = n - (h + 1);
+      remaining = unplayed ? n - through : n - (h + 1);
       if (remaining > 0 && Math.abs(up) > remaining) { decided = true; decidedAt = h; break; }
     }
     var finished = decided || through === n;
@@ -567,10 +572,14 @@
     for (var h = from; h < to; h++) arr.push(entrantScore(round, e, h, useNet, sm, count));
     return arr;
   }
-  /** from 이상 to 미만의 홀 가운데 내기에 들어가는 홀(skip에 없는 홀)의 번호들. 매치 · 나소는 이 홀들만으로 한 판을 겨룬다 */
-  function holesIn(from, to, skip) {
+  /**
+   * from 이상 to 미만의 홀 가운데 내기에 들어가는 홀(skip에 없는 홀)의 번호들. 매치 · 나소는 이 홀들만으로 한 판을 겨룬다.
+   * po(친 순서, 홀 번호 배열)를 주면 그 순서로, 아니면 홀 번호 순으로 늘어놓는다
+   */
+  function holesIn(from, to, skip, po) {
     var list = [];
-    for (var h = from; h < to; h++) if (!(skip && skip[h])) list.push(h);
+    if (po) po.forEach(function (h) { if (h >= from && h < to && !(skip && skip[h])) list.push(h); });
+    else for (var h = from; h < to; h++) if (!(skip && skip[h])) list.push(h);
     return list;
   }
   function seriesOf(round, e, useNet, sm, list) {
@@ -607,11 +616,14 @@
     var res = { matches: [], transfers: [], error: pr.error, net: useNet, unit: unit };
     if (pr.error) return res;
     var sm = strokesMap(round);
+    // opt.order(친 순서)가 있으면 그 순서로 겨룬다: 10번홀 출발 라운드에서 18번홀 다음이 1번홀이고, 남은 홀도 아직 치지 않은 홀로 센다.
+    // computeAll은 빌드 16부터 만든 라운드에만 순서를 넘긴다 (그 전 라운드는 홀 번호 순 그대로)
+    var po = opt.order ? holeOrder(round, opt.order) : null;
     pr.pairs.forEach(function (pair) {
       var A = pair[0], B = pair[1];
       // 내기를 시작하기 전의 홀(opt.skip)은 매치에 들어가지 않는다: 남은 홀들만으로 겨룬다 (list: 매치에 들어가는 홀 번호, status.holes와 같은 순서)
-      var list = holesIn(0, round.holes, opt.skip);
-      var st = computeMatch(seriesOf(round, A, useNet, sm, list), seriesOf(round, B, useNet, sm, list));
+      var list = holesIn(0, round.holes, opt.skip, po);
+      var st = computeMatch(seriesOf(round, A, useNet, sm, list), seriesOf(round, B, useNet, sm, list), !!po);
       var m = { a: { id: A.id, name: A.name, pids: A.pids }, b: { id: B.id, name: B.name, pids: B.pids }, status: st, money: 0, running: 0, list: list };
       // 팀 매치: 매치에 들어간 홀마다 두 팀에 적용된 타수와 그 타수를 친 사람 (승부가 난 뒤의 홀은 status.holes처럼 넣지 않는다). 홀 번호로 찾는다
       if (A.isTeam) m.best = fillBest([], round, A, B, useNet, sm, st, list);
@@ -639,14 +651,15 @@
     if (pr.error) { res.error = pr.error; return res; }
     var sm = strokesMap(round);
     var segs = [{ key: 'front', name: '전반', from: 0, to: 9 }, { key: 'back', name: '후반', from: 9, to: 18 }, { key: 'total', name: '전체', from: 0, to: 18 }];
+    var po = opt.order ? holeOrder(round, opt.order) : null; // 친 순서 (matchPlay와 같다): 전체 판은 10번홀 출발이면 10~18번홀 다음에 1~9번홀
     pr.pairs.forEach(function (pair) {
       var A = pair[0], B = pair[1];
       var m = { a: { id: A.id, name: A.name, pids: A.pids }, b: { id: B.id, name: B.name, pids: B.pids }, segments: [] };
       var best = [];
       segs.forEach(function (sg) {
         // 내기를 시작하기 전의 홀(opt.skip)은 판에 들어가지 않는다. 한 홀도 남지 않은 판(empty)은 겨루지 않는다
-        var list = holesIn(sg.from, sg.to, opt.skip);
-        var st = computeMatch(seriesOf(round, A, useNet, sm, list), seriesOf(round, B, useNet, sm, list));
+        var list = holesIn(sg.from, sg.to, opt.skip, po);
+        var st = computeMatch(seriesOf(round, A, useNet, sm, list), seriesOf(round, B, useNet, sm, list), !!po);
         var seg = { key: sg.key, name: sg.name, status: st, money: 0, list: list, empty: list.length === 0 };
         if (A.isTeam) fillBest(best, round, A, B, useNet, sm, st, list);
         if (st.finished && st.up !== 0 && unit > 0) {
@@ -918,6 +931,11 @@
     // 순위(종합) · 스테이블포드 · 기록에는 그대로 들어간다. 처음부터(1)면 skip이 없어 예전과 똑같이 계산한다
     var from = betFrom(round), skip = betSkip(round, order);
     function bet(o) { if (!skip) return o || {}; var c = {}; Object.keys(o || {}).forEach(function (k) { c[k] = o[k]; }); c.skip = skip; return c; }
+    // 매치 · 나소를 친 순서로 겨루는 것은 빌드 16부터 만든 라운드만이다 (round.games.bonus.made). 그 전에 만든 라운드와 기록은 홀 번호 순 그대로라
+    // 이미 정산한 금액이 바뀌지 않는다
+    var inOrder = (Number(g.bonus && g.bonus.made) || 0) >= 16;
+    // 친 순서를 모르면(ctx.order 없음) 홀 번호 순으로 본다: 그래도 남은 홀은 아직 겨루지 않은 홀로 센다
+    function inPlay(o) { var c = {}; Object.keys(o || {}).forEach(function (k) { c[k] = o[k]; }); c.order = holeOrder(round, order); return c; }
     var out = { transfers: [], betFrom: from, skip: skip }, fixed = null;
     function add(key, res, included) {
       res.enabled = !!included;
@@ -933,8 +951,8 @@
     var oj = withOrder(g.ojang);
     oj.eraser = !!(g.bonus && g.bonus.eraser); // 지우개로 지워진 니어는 오장에서도 없던 것으로 한다
     add('ojang', ojang(round, bet(oj)), g.ojang && g.ojang.enabled);
-    add('match', matchPlay(round, bet(g.match)), g.match && g.match.enabled);
-    if (round.holes === 18) add('nassau', nassau(round, bet(g.nassau)), g.nassau && g.nassau.enabled);
+    add('match', matchPlay(round, bet(inOrder ? inPlay(g.match) : g.match)), g.match && g.match.enabled);
+    if (round.holes === 18) add('nassau', nassau(round, bet(inOrder ? inPlay(g.nassau) : g.nassau)), g.nassau && g.nassau.enabled);
     add('bestball', bestBall(round, bet(g.bestball)), g.bestball && g.bestball.enabled);
     add('vegas', vegas(round, bet(g.vegas)), g.vegas && g.vegas.enabled);
     var b = g.bonus || {};

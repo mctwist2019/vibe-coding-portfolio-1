@@ -64,6 +64,10 @@ table.byhole th:first-child, table.byhole td:first-child { width: 3.7em; white-s
 table.byhole .lb { display: inline-block; font-size: 11px; font-weight: 600; white-space: nowrap; }
 table.byhole td:first-child .lb { color: var(--muted); font-weight: 400; }
 table.byhole tr.sum td { background: #f6f8f6; font-weight: 700; }
+/* 옆으로 민 동안 붙어 있는 홀 칸: 표를 카드 안쪽 너비 안에서만 밀어(.tablewrap.flush) 홀 칸 왼쪽으로 다른 칸이 비치지 않게 하고, 오른쪽에 구분선을 그린다.
+   구분선(box-shadow)은 칸 테두리를 합친 표에서는 그려지지 않으므로 이 표만 테두리를 따로 둔다 */
+.tablewrap.flush { margin: 0; padding: 0; }
+table.byhole.wide { border-collapse: separate; border-spacing: 0; }
 table.byhole.wide th:first-child, table.byhole.wide td:first-child { position: sticky; left: 0; background: #fff; z-index: 1; box-shadow: 2px 0 0 var(--line); }
 table.byhole.wide tr.sum td:first-child { background: #f6f8f6; }
 /* 리더보드의 게임별 룰 설명 */

@@ -1201,3 +1201,107 @@ test('bets from a later hole: skins carry and the 오장 double after an all-squ
   assert.deepEqual(from1.skins.holes.slice(0, 6).map((h) => (h.winner ? h.winner + h.skins : 't')).join(' '), 't t t t a5 b1');
   assert.deepEqual(from1.ojang.holes.slice(0, 6).map((h) => h.mult).join(' '), '1 2 2 2 2 1');
 });
+
+// ── 매치 · 나소를 친 순서로 (빌드 16부터 만든 라운드) ──
+const BACK_FIRST = Array.from({ length: 18 }, (_, i) => (i + 9) % 18);
+const matchRound = (made, scores, games) => mkRound(TEAM4, scores, { pars: Array(18).fill(4), games: Object.assign({ match: { enabled: true, unit: 10000, mode: 'team' }, bonus: { made } }, games || {}) });
+
+test('a round started on the 10th hole: the match is not over while holes are still to be played (rounds made from build 16)', () => {
+  // 10~17번홀을 치고 A팀이 2홀 앞섰다. 아직 열 홀(18번홀과 1~9번홀)이 남았다
+  const sc = { a: Array(18).fill(null), b: Array(18).fill(null), c: Array(18).fill(null), d: Array(18).fill(null) };
+  for (let h = 9; h <= 16; h++) { sc.a[h] = h < 11 ? 3 : 4; sc.b[h] = 5; sc.c[h] = 4; sc.d[h] = 5; }
+  let m = G.computeAll(matchRound(16, sc), { order: BACK_FIRST }).match.matches[0];
+  assert.equal(m.status.text, '2UP (8홀)');
+  assert.equal(m.status.finished, false);
+  assert.equal(m.money, 20000);
+  assert.equal(m.running, 20000);
+  assert.deepEqual(m.list, BACK_FIRST, 'the match is played in the order of play: 10 to 18, then 1 to 9');
+  // B팀이 18번홀을 이기면 1UP (9홀)으로 줄어든다
+  sc.a[17] = 5; sc.b[17] = 5; sc.c[17] = 4; sc.d[17] = 5;
+  m = G.computeAll(matchRound(16, sc), { order: BACK_FIRST }).match.matches[0];
+  assert.equal(m.status.text, '1UP (9홀)');
+  assert.equal(m.money, 10000);
+  // 빌드 15까지 만든 라운드는 예전 계산 그대로다 (홀 번호 순, 그 홀 뒤에 놓인 홀 수로 판정): 이미 정산한 기록이 바뀌지 않는다
+  const old = G.computeAll(matchRound(15, sc), { order: BACK_FIRST }).match.matches[0];
+  assert.equal(old.status.text, '2&1');
+  assert.equal(old.money, 20000);
+  assert.deepEqual(old.list, Array.from({ length: 18 }, (_, i) => i));
+  assert.deepEqual(G.computeAll(matchRound(0, sc), { order: BACK_FIRST }).match.matches[0].status.text, '2&1');
+  // 다 치면 같은 결과: 1~9번홀을 모두 비기면 A팀 1UP
+  for (let h = 0; h < 9; h++) { sc.a[h] = 4; sc.b[h] = 5; sc.c[h] = 4; sc.d[h] = 5; }
+  m = G.computeAll(matchRound(16, sc), { order: BACK_FIRST }).match.matches[0];
+  assert.equal(m.status.text, '1UP');
+  assert.equal(m.status.finished, true);
+  assert.equal(m.running, 0);
+  assert.equal(m.money, 10000);
+});
+
+test('a hole left out in the middle does not end the match early (rounds made from build 16)', () => {
+  // 9홀: 1번홀과 3~6번홀을 A팀이 이겼고 2번홀은 아직 넣지 않았다. 5홀 앞섰지만 네 홀(2 · 7 · 8 · 9번홀)이 남아 5&4
+  const r9 = (made, sc) => mkRound(TEAM4, sc, { holes: 9, pars: Array(9).fill(4), games: { match: { enabled: true, unit: 1000, mode: 'team' }, bonus: { made } } });
+  const sc = { a: [3, null, 3, 3, 3, 3], b: [5, null, 5, 5, 5, 5], c: [4, null, 4, 4, 4, 4], d: [5, null, 5, 5, 5, 5] };
+  let m = G.computeAll(r9(16, sc)).match.matches[0];
+  assert.equal(m.status.text, '5&4');
+  // 한 홀 덜 이겼을 때: 4홀 앞서고 다섯 홀이 남았으면 아직 끝나지 않는다. 예전 계산은 2번홀을 세지 않아 4&3로 끝냈다
+  const sc4 = { a: [3, null, 3, 3, 3], b: [5, null, 5, 5, 5], c: [4, null, 4, 4, 4], d: [5, null, 5, 5, 5] };
+  m = G.computeAll(r9(16, sc4)).match.matches[0];
+  assert.equal(m.status.text, '4UP (4홀)');
+  assert.equal(m.status.finished, false);
+  assert.equal(G.computeAll(r9(15, sc4)).match.matches[0].status.text, '4UP (4홀)', 'the old rule: after hole 5 four holes follow, so not decided either');
+  const sc5 = { a: [3, null, 3, 3, 3, 3], b: [5, null, 5, 5, 5, 5], c: [4, null, 4, 4, 4, 4], d: [5, null, 5, 5, 5, 5] };
+  assert.equal(G.computeAll(r9(15, sc5)).match.matches[0].status.text, '5&3', 'the old rule counts the three holes after hole 6 and leaves out hole 2');
+  // 순서대로 다 넣은 라운드는 두 계산이 같다
+  const full = { a: Array(9).fill(3), b: Array(9).fill(5), c: Array(9).fill(4), d: Array(9).fill(5) };
+  assert.equal(G.computeAll(r9(16, full)).match.matches[0].status.text, '5&4');
+  assert.equal(G.computeAll(r9(15, full)).match.matches[0].status.text, '5&4');
+});
+
+test('nassau in the order of play: the 전체 판 of a round started on the 10th hole runs 10 to 18, then 1 to 9', () => {
+  const sc = { a: Array(18).fill(null), b: Array(18).fill(null), c: Array(18).fill(null), d: Array(18).fill(null) };
+  for (let h = 9; h < 18; h++) { sc.a[h] = h < 14 ? 3 : 4; sc.b[h] = 5; sc.c[h] = 4; sc.d[h] = 5; }
+  const games = { nassau: { enabled: true, unit: 5000, mode: 'team' } };
+  const res = G.computeAll(matchRound(16, sc, games), { order: BACK_FIRST }).nassau;
+  const seg = res.matches[0].segments;
+  // 후반(10~18번홀)은 5&4로 끝났고, 전체는 아홉 홀이 남아 5UP (5홀)… 이 아니라 후반이 끝난 뒤의 홀도 전체에는 들어가 5UP (9홀)
+  assert.deepEqual(seg.map((s) => s.status.text), ['AS', '5&4', '5UP (9홀)']);
+  assert.deepEqual(seg[2].list.slice(0, 3), [9, 10, 11]);
+  assert.deepEqual(seg.map((s) => s.money), [0, 5000, 0], 'only the finished 판 pays; the 전체 판 is still in progress');
+  assert.deepEqual(betNet(res.transfers, TEAM4), { a: 5000, b: 5000, c: -5000, d: -5000 });
+  // 예전 라운드: 전체 판을 홀 번호 순으로 보아 14번홀에서 5&4로 끝낸다
+  const old = G.computeAll(matchRound(15, sc, games), { order: BACK_FIRST }).nassau.matches[0].segments;
+  assert.deepEqual(old.map((s) => s.status.text), ['AS', '5&4', '5&4']);
+});
+
+test('match money with sides of unequal size, and the cases the reviews asked to pin', () => {
+  // 3 대 2: 진 팀 각자가 홀 차 × 단가를 내고 이긴 팀이 똑같이 나눈다 (나누어떨어지지 않으면 원 단위에서 반올림한다)
+  const five = [{ id: 'a', name: 'A', team: 'A' }, { id: 'b', name: 'B', team: 'A' }, { id: 'c', name: 'C', team: 'A' }, { id: 'd', name: 'D', team: 'B' }, { id: 'e', name: 'E', team: 'B' }];
+  const one = mkRound(five, { a: [3], b: [5], c: [5], d: [4], e: [5] }, { holes: 9 });
+  let res = G.matchPlay(one, { unit: 10000, mode: 'team' });
+  assert.equal(res.matches[0].status.text, '1UP (1홀)', 'a lead of one hole after the first hole already counts');
+  assert.equal(res.matches[0].money, 10000);
+  let pay = {}; res.transfers.forEach((t) => { pay[t.from] = (pay[t.from] || 0) + t.amount; });
+  assert.deepEqual(Object.keys(pay).sort().map((k) => k + ' ' + Math.round(pay[k])), ['d 10000', 'e 10000'], 'each player of the losing team pays lead × unit');
+  assert.equal(Math.round(res.transfers.reduce((s, t) => s + t.amount, 0)), 20000);
+  assert.deepEqual(betNet(res.transfers, five), { a: 6667, b: 6667, c: 6667, d: -10000, e: -10000 });
+  // 2 대 3으로 뒤집어도 같다: 진 세 사람이 각자 내고 두 사람이 나눈다
+  const rev = mkRound(five, { a: [5], b: [5], c: [5], d: [4], e: [5] }, { holes: 9 });
+  assert.deepEqual(betNet(G.matchPlay(rev, { unit: 10000, mode: 'team' }).transfers, five), { a: -10000, b: -10000, c: -10000, d: 15000, e: 15000 });
+  // 진행 중에 4홀 이상 앞서도 그만큼이다 (18홀 가운데 여섯 홀을 모두 이김)
+  const six = mkRound(TEAM4, { a: Array(6).fill(3), b: Array(6).fill(5), c: Array(6).fill(4), d: Array(6).fill(5) });
+  res = G.matchPlay(six, { unit: 10000, mode: 'team' });
+  assert.equal(res.matches[0].status.text, '6UP (6홀)');
+  assert.equal(res.matches[0].money, 60000);
+  assert.equal(res.matches[0].running, 60000);
+  // 마지막 홀에서 끝난 매치: 확정 금액만 있고 running은 0
+  const last = mkRound(TEAM4, { a: [3, 4, 4, 4, 4, 4, 4, 4, 4], b: Array(9).fill(5), c: Array(9).fill(4), d: Array(9).fill(5) }, { holes: 9 });
+  res = G.matchPlay(last, { unit: 10000, mode: 'team' });
+  assert.equal(res.matches[0].status.text, '1UP');
+  assert.equal(res.matches[0].status.finished, true);
+  assert.equal(res.matches[0].running, 0);
+  assert.equal(res.matches[0].money, 10000);
+  // 나소: 끝나지 않은 판은 앞서 있어도 주고받지 않는다
+  const nas = mkRound(TEAM4, { a: [3, 3, 3], b: [5, 5, 5], c: [4, 4, 4], d: [5, 5, 5] });
+  const nres = G.nassau(nas, { unit: 5000, mode: 'team' });
+  assert.deepEqual(nres.matches[0].segments.map((s) => s.status.text + ' ' + s.money), ['3UP (3홀) 0', 'AS 0', '3UP (3홀) 0']);
+  assert.deepEqual(nres.transfers, []);
+});

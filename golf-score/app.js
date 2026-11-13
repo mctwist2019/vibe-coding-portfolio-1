@@ -1699,7 +1699,7 @@
   /** 꺼 둔 게임의 탭 맨 위 안내. 진행 중인 라운드에서는 바로 켤 수 있다 (보너스는 탭 안의 세 단추로 켠다) */
   function offNotice(key) {
     return '<div class="notice off"><span><b>꺼 둔 게임이에요.</b> ' +
-      (key === 'bonus' ? '니어 · 롱기 · 버디 내기를 모두 꺼 두어서 정산에 들어가지 않아요. 아래 내용은 참고용이에요.' : '정산에 들어가지 않고, 아래 금액은 참고용이에요.') + '</span>' +
+      (key === 'bonus' ? '니어 · 롱기 · 버디 내기를 모두 꺼 두어서 정산에 들어가지 않아요. 아래 내용은 참고용이에요.' : '정산에 들어가지 않고, 아래 내용은 참고용이에요.') + '</span>' +
       (state.readOnly || key === 'bonus' ? '' : '<button class="btn sm" data-action="toggle-money" data-key="' + key + '">정산에 넣기</button>') + '</div>';
   }
 
@@ -1750,7 +1750,8 @@
         return n ? cell(g, g - par, G.fmtToPar(g - par)) : '<td></td>';
       }).join('') + '</tr>';
     };
-    var html = '<div class="card"><h2>홀별 스코어<span class="hint">타수 · 파 대비</span></h2><div class="tablewrap">' +
+    // 넓은 표(다섯 명부터)는 카드 안쪽 너비 안에서만 민다(flush): 카드 여백까지 밀리게 두면 붙어 있는 홀 칸 왼쪽으로 다른 칸이 비친다
+    var html = '<div class="card"><h2>홀별 스코어<span class="hint">타수 · 파 대비</span></h2><div class="tablewrap' + (wide ? ' flush' : '') + '">' +
       '<table class="byhole' + (wide ? ' wide" style="min-width:' + (52 + 58 * rows.length) + 'px' : '') + '"><thead><tr><th>홀</th>' +
       rows.map(function (p) { return '<th>' + esc(p.name) + '</th>'; }).join('') + '</tr></thead><tbody>';
     for (var i = 0; i < r.holes; i++) {
@@ -1973,7 +1974,9 @@
       res.matches.map(function (m) {
         // 진행 중인 매치는 '지금 …원'으로 적는다 (정산에도 그 금액이 들어간다). 끝난 매치와 지난 라운드의 기록은 금액만 적는다
         var fin = m.status.finished || state.readOnly;
-        return matchBox(m, m.status, fin && m.money && res.enabled ? won(m.money) : null, !fin && m.running && res.enabled ? '지금 ' + (mteam ? '각자 ' : '') + won(m.running) : null);
+        // 금액 줄의 자리는 동률일 때도 비워 둔다: 동률과 리드가 오갈 때마다 아래 표가 한 줄씩 밀리지 않게
+        var now = fin || !res.enabled || !(res.unit > 0) ? null : m.running ? '지금 ' + (mteam ? '각자 ' : '') + won(m.running) : '&nbsp;';
+        return matchBox(m, m.status, fin && m.money && res.enabled ? won(m.money) : null, now);
       }).join('') +
       '</div><div class="muted small" style="margin-top:8px"><span style="color:var(--team-A)">■</span> 왼쪽 승 &nbsp;<span style="color:var(--team-B)">■</span> 오른쪽 승 &nbsp;<span style="color:#cbd5d0">■</span> 무승부. ' +
       '금액은 지금까지의 홀 차 × 단가예요.' + (res.unit && res.enabled ? ' 매치가 진행 중이어도 정산에 들어가고, 끝나면 확정돼요.' : '') + '</div></div>' +
@@ -2162,7 +2165,12 @@
           (fd.total > fd.startOut ? ' 미리 걷었다면 스킨스 탭 공금 장부에서 "공금을 걷었어요"를 고르세요.' : '')) +
         ' 손익은 낸 돈' + (fd.caddieTotal ? '과 캐디 몫' : '') + '까지 넣은 금액이에요.</div>';
     }
-    if (!state.readOnly && holesDone(r) < r.holes) html += '<div class="notice">아직 ' + (r.holes - holesDone(r)) + '홀이 남았어요. 매치 금액은 지금까지의 홀 차로 넣었고, 나소는 판이 끝나야 들어가요.</div>';
+    if (!state.readOnly && holesDone(r) < r.holes) {
+      // 매치 · 나소 이야기는 그 게임의 돈이 실제로 정산에 걸려 있을 때만 한다 (꺼 둔 게임이나 금액 0이면 넣은 것이 없다)
+      var mOn = all.match && all.match.enabled && !all.match.error && all.match.unit > 0;
+      var nOn = all.nassau && all.nassau.enabled && !all.nassau.error && all.nassau.unit > 0;
+      html += '<div class="notice">아직 ' + (r.holes - holesDone(r)) + '홀이 남았어요.' + (mOn ? ' 매치 금액은 지금까지의 홀 차로 넣었어요.' : '') + (nOn ? ' 나소는 판이 끝나야 들어가요.' : '') + '</div>';
+    }
     html += '<button class="btn block" data-action="share-text">결과 복사 / 공유</button>';
     return html;
   }
@@ -2753,9 +2761,22 @@
     if (cr.left < sr.left + peek) strip.scrollLeft += cr.left - sr.left - peek;
     else if (cr.right > sr.right - peek) strip.scrollLeft += cr.right - sr.right + peek;
   }
+  /** 지금 그려진 화면을 가리키는 표시: 같은 화면을 다시 그릴 때만 옆으로 민 표의 위치를 되돌린다 (keepWraps) */
+  function screenSig() { return state.view + '|' + (state.view === 'board' ? state.boardTab : '') + '|' + (state.viewRoundId || ''); }
+  var drawnSig = null;
+  /**
+   * 옆으로 미는 표(.tablewrap: 플레이어가 많은 홀별 스코어, 스코어카드 등)는 다시 그리면 맨 왼쪽으로 돌아간다. 함께 보는 라운드에서는
+   * 점수가 들어올 때마다 다시 그리므로 보던 칸이 계속 사라진다 → 같은 화면을 다시 그린 것이면 그리기 전 위치(xs)로 되돌린다
+   */
+  function keepWraps(xs, same) {
+    var wraps = $app.querySelectorAll('.tablewrap');
+    if (!same || wraps.length !== xs.length) return;
+    for (var i = 0; i < wraps.length; i++) if (xs[i]) wraps[i].scrollLeft = xs[i];
+  }
   function render() {
     var y = window.scrollY, mz = $app.querySelector('.mapzoom'), my = mz ? mz.scrollTop : 0; // 약도 크게 보기 창은 따로 스크롤된다
     var tabs0 = $app.querySelector('.tabs'), tabsX = tabs0 ? tabs0.scrollLeft : 0;
+    var wrapsX = [].map.call($app.querySelectorAll('.tablewrap'), function (w) { return w.scrollLeft; }), sig0 = drawnSig;
     var keep = setupAnchorTop(), bar = keep === null ? null : $app.querySelector('.topbar'), lim = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
     var whole = keep !== null && setupAnchorTop(true) <= lim; // 카드가 통째로 화면 위로 지나갔으면 카드의 아랫변을 기준으로 삼는다
     if (whole) keep = setupAnchorTop(true); else if (keep !== null && keep > lim) keep = null; // 코스 칸이 보이는 중이면 그대로 둔다
@@ -2770,6 +2791,8 @@
     if (mz && my) mz.scrollTop = my;
     centerHoleStrip();
     keepTabStrip(tabsX);
+    drawnSig = screenSig();
+    keepWraps(wrapsX, sig0 === drawnSig);
     fitSummary();
   }
   /** 다시 그린 뒤에도 방금 누른 버튼(sel)이 손가락 아래 그대로 있도록 스크롤을 맞춘다 (위쪽 내용이 늘거나 줄 때) */
